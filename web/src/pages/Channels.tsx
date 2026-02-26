@@ -177,6 +177,7 @@ export default function Channels() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginMsg, setLoginMsg] = useState('');
   const [softwareList, setSoftwareList] = useState<any[]>([]);
+  const [serverPlatform, setServerPlatform] = useState<string>('');
   const [installingSw, setInstallingSw] = useState<string | null>(null);
   const [napcatStatus, setNapcatStatus] = useState<any>(null);
   const [reconnectLogs, setReconnectLogs] = useState<any[]>([]);
@@ -203,7 +204,7 @@ export default function Channels() {
   };
 
   const loadSoftware = () => {
-    api.getSoftwareList().then(r => { if (r.ok) setSoftwareList(r.software || []); }).catch(() => {});
+    api.getSoftwareList().then(r => { if (r.ok) { setSoftwareList(r.software || []); if (r.platform) setServerPlatform(r.platform); } }).catch(() => {});
   };
 
   const handleInstallContainer = async (id: string) => {
@@ -525,22 +526,33 @@ export default function Channels() {
                 </h3>
                 <p className="text-sm text-gray-500 mt-1">
                   {currentDef.id === 'qq'
-                    ? '需要安装 NapCat Docker 容器才能使用 QQ 个人号通道。安装后将自动配置 OneBot11 WebSocket 协议。'
+                    ? (serverPlatform === 'windows'
+                      ? '需要安装 NapCat Shell 才能使用 QQ 个人号通道。安装后将自动配置 OneBot11 WebSocket 协议。'
+                      : '需要安装 NapCat Docker 容器才能使用 QQ 个人号通道。安装后将自动配置 OneBot11 WebSocket 协议。')
                     : '需要安装 wechatbot-webhook Docker 容器才能使用微信个人号通道。安装后将自动配置回调地址。'}
                 </p>
               </div>
-              {!isContainerInstalled('docker') ? (
-                <div className="text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-4 py-2 inline-block">
-                  ⚠️ 需要先安装 Docker，请前往 系统配置 → 运行环境 安装
-                </div>
-              ) : (
+              {(currentDef.id === 'qq' && serverPlatform === 'windows') ? (
                 <button
-                  onClick={() => handleInstallContainer(currentDef.id === 'qq' ? 'napcat' : 'wechat')}
+                  onClick={() => handleInstallContainer('napcat')}
                   disabled={installingSw !== null}
                   className="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl"
                 >
                   {installingSw ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-                  {installingSw ? '安装中...' : '一键安装'}
+                  {installingSw ? '安装中...' : '一键安装 NapCat Shell'}
+                </button>
+              ) : !isContainerInstalled('docker') ? (
+                <div className="text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-4 py-2 inline-block">
+                  需要先安装 Docker，请前往 系统配置 → 运行环境 安装
+                </div>
+              ) : (
+                <button
+                  onClick={() => handleInstallContainer('napcat')}
+                  disabled={installingSw !== null}
+                  className="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl"
+                >
+                  {installingSw ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                  {installingSw ? '安装中...' : '一键安装 NapCat Docker'}
                 </button>
               )}
               <p className="text-[11px] text-gray-400">安装进度可在左下角「消息中心」实时查看</p>

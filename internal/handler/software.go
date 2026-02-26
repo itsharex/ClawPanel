@@ -173,7 +173,7 @@ func GetSoftwareList(cfg *config.Config) gin.HandlerFunc {
 			Status: wechatStatus, Category: "container", Icon: "message-square",
 		})
 
-		c.JSON(http.StatusOK, gin.H{"ok": true, "software": list})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "software": list, "platform": runtime.GOOS})
 	}
 }
 
@@ -900,23 +900,29 @@ func getNapCatShellDir(cfg *config.Config) string {
 		`C:\NapCat`,
 		filepath.Join(home, "AppData", "Local", "NapCat"),
 	}
+	markers := []string{"napcat.bat", "NapCatWinBootMain.exe"}
 	for _, dir := range candidates {
-		// Check for napcat.bat or NapCatWinBootMain.exe
-		if _, err := os.Stat(filepath.Join(dir, "napcat.bat")); err == nil {
-			return dir
+		if _, err := os.Stat(dir); err != nil {
+			continue
 		}
-		if _, err := os.Stat(filepath.Join(dir, "NapCatWinBootMain.exe")); err == nil {
-			return dir
-		}
-		// Check for nested NapCat.XXXX.Shell subdirectory
-		entries, _ := os.ReadDir(dir)
-		for _, e := range entries {
-			if e.IsDir() && strings.Contains(e.Name(), "NapCat") && strings.Contains(e.Name(), "Shell") {
-				subDir := filepath.Join(dir, e.Name())
-				if _, err := os.Stat(filepath.Join(subDir, "napcat.bat")); err == nil {
-					return subDir
+		// Recursive walk to find napcat.bat or NapCatWinBootMain.exe anywhere under candidate
+		found := ""
+		filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err != nil || found != "" {
+				return filepath.SkipDir
+			}
+			if !d.IsDir() {
+				for _, m := range markers {
+					if strings.EqualFold(d.Name(), m) {
+						found = filepath.Dir(path)
+						return filepath.SkipAll
+					}
 				}
 			}
+			return nil
+		})
+		if found != "" {
+			return found
 		}
 	}
 	return ""
@@ -1040,6 +1046,23 @@ if ($shellDir -ne "") {
 }
 '@
   $webui | Set-Content -Path (Join-Path $configDir "webui.json") -Encoding UTF8
+
+  # Start NapCat Shell process
+  Write-Output "🚀 启动 NapCat Shell..."
+  $batFile = Join-Path $shellDir "napcat.bat"
+  $exeFile = Join-Path $shellDir "NapCatWinBootMain.exe"
+  if (Test-Path $batFile) {
+    $q = [char]34
+    $batArgs = "/c " + $q + $batFile + $q
+    Start-Process -FilePath "cmd.exe" -ArgumentList $batArgs -WorkingDirectory $shellDir -WindowStyle Hidden
+    Write-Output "✅ NapCat Shell 已通过 napcat.bat 启动"
+  } elseif (Test-Path $exeFile) {
+    Start-Process -FilePath $exeFile -WorkingDirectory $shellDir -WindowStyle Hidden
+    Write-Output "✅ NapCat Shell 已通过 NapCatWinBootMain.exe 启动"
+  } else {
+    Write-Output "⚠️ 未找到启动文件，请手动启动 NapCat Shell"
+  }
+  Start-Sleep -Seconds 3
 
   Write-Output "✅ NapCat Shell (Windows) 安装完成"
   Write-Output "📁 安装目录: $shellDir"
