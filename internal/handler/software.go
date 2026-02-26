@@ -877,50 +877,64 @@ func isNapCatShellRunning() bool {
 // buildNapCatWindowsInstallScript builds a PowerShell script to install NapCat Shell on Windows
 func buildNapCatWindowsInstallScript(cfg *config.Config) string {
 	installDir := filepath.Join(cfg.DataDir, "napcat")
-	// Use forward slashes in PowerShell or properly escaped backslashes
-	installDirPS := strings.ReplaceAll(installDir, `\`, `\\`)
 	return fmt.Sprintf(`
-set -e
-echo "📦 安装 NapCat (QQ个人号) Windows Shell 版本..."
-echo "无需 Docker，直接运行 NapCat Shell"
+$ErrorActionPreference = "Stop"
+Write-Output "📦 安装 NapCat (QQ个人号) Windows Shell 版本..."
+Write-Output "无需 Docker，直接运行 NapCat Shell"
 
-INSTALL_DIR="%s"
-mkdir -p "$INSTALL_DIR"
+$INSTALL_DIR = "%s"
+if (-not (Test-Path $INSTALL_DIR)) {
+  New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
+}
 
-echo "📥 下载 NapCat Shell Windows OneKey 版..."
-NAPCAT_URL="https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.Windows.OneKey.zip"
-NAPCAT_ZIP="$INSTALL_DIR/napcat-onekey.zip"
-
-# Try GitHub first, then mirror
-if ! curl -fSL --connect-timeout 30 -o "$NAPCAT_ZIP" "$NAPCAT_URL" 2>/dev/null; then
-  echo "⚠️ GitHub 下载失败，尝试镜像..."
-  NAPCAT_URL="https://ghfast.top/https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.Windows.OneKey.zip"
-  curl -fSL --connect-timeout 30 -o "$NAPCAT_ZIP" "$NAPCAT_URL"
-fi
-
-echo "📦 解压 NapCat Shell..."
-cd "$INSTALL_DIR"
-if command -v unzip &>/dev/null; then
-  unzip -o "$NAPCAT_ZIP" -d "$INSTALL_DIR"
-elif command -v powershell &>/dev/null; then
-  powershell -Command "Expand-Archive -Force -Path '$NAPCAT_ZIP' -DestinationPath '$INSTALL_DIR'"
-else
-  echo "❌ 需要 unzip 或 powershell 来解压文件"
+Write-Output "📥 下载 NapCat Shell Windows OneKey 版..."
+$NAPCAT_ZIP = Join-Path $INSTALL_DIR "napcat-onekey.zip"
+$urls = @(
+  "https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.Windows.OneKey.zip",
+  "https://ghfast.top/https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.Windows.OneKey.zip"
+)
+$downloaded = $false
+foreach ($url in $urls) {
+  try {
+    Write-Output "尝试下载: $url"
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $url -OutFile $NAPCAT_ZIP -UseBasicParsing -TimeoutSec 120
+    $downloaded = $true
+    Write-Output "✅ 下载完成"
+    break
+  } catch {
+    Write-Output "⚠️ 下载失败: $_"
+  }
+}
+if (-not $downloaded) {
+  Write-Output "❌ 所有下载源均失败，请手动从 GitHub 下载 NapCat.Shell.Windows.OneKey.zip"
   exit 1
-fi
+}
 
-rm -f "$NAPCAT_ZIP"
+Write-Output "📦 解压 NapCat Shell..."
+Expand-Archive -Force -Path $NAPCAT_ZIP -DestinationPath $INSTALL_DIR
+Remove-Item -Force $NAPCAT_ZIP -ErrorAction SilentlyContinue
 
-echo "🔧 配置 OneBot11 (WS + HTTP)..."
 # Find the NapCat Shell directory (could be nested)
-NAPCAT_SHELL_DIR=$(find "$INSTALL_DIR" -name "napcat.bat" -exec dirname {} \; 2>/dev/null | head -1)
-if [ -z "$NAPCAT_SHELL_DIR" ]; then
-  NAPCAT_SHELL_DIR=$(find "$INSTALL_DIR" -name "NapCatWinBootMain.exe" -exec dirname {} \; 2>/dev/null | head -1)
-fi
+$shellDir = ""
+$batFiles = Get-ChildItem -Path $INSTALL_DIR -Recurse -Filter "napcat.bat" -ErrorAction SilentlyContinue
+if ($batFiles) {
+  $shellDir = $batFiles[0].DirectoryName
+} else {
+  $exeFiles = Get-ChildItem -Path $INSTALL_DIR -Recurse -Filter "NapCatWinBootMain.exe" -ErrorAction SilentlyContinue
+  if ($exeFiles) {
+    $shellDir = $exeFiles[0].DirectoryName
+  }
+}
 
-if [ -n "$NAPCAT_SHELL_DIR" ]; then
-  mkdir -p "$NAPCAT_SHELL_DIR/config"
-  cat > "$NAPCAT_SHELL_DIR/config/onebot11.json" << 'OBEOF'
+if ($shellDir -ne "") {
+  Write-Output "🔧 配置 OneBot11 (WS + HTTP)..."
+  $configDir = Join-Path $shellDir "config"
+  if (-not (Test-Path $configDir)) {
+    New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+  }
+
+  $onebot11 = @'
 {
   "network": {
     "websocketServers": [{
@@ -952,24 +966,26 @@ if [ -n "$NAPCAT_SHELL_DIR" ]; then
   "parseMultMsg": true,
   "imageDownloadProxy": ""
 }
-OBEOF
+'@
+  $onebot11 | Set-Content -Path (Join-Path $configDir "onebot11.json") -Encoding UTF8
 
-  cat > "$NAPCAT_SHELL_DIR/config/webui.json" << 'WUEOF'
+  $webui = @'
 {
   "host": "0.0.0.0",
   "port": 6099,
   "token": "clawpanel-qq",
   "loginRate": 3
 }
-WUEOF
+'@
+  $webui | Set-Content -Path (Join-Path $configDir "webui.json") -Encoding UTF8
 
-  echo "✅ NapCat Shell (Windows) 安装完成"
-  echo "📁 安装目录: $NAPCAT_SHELL_DIR"
-  echo "📝 请在通道管理中配置 QQ 并扫码登录"
-else
-  echo "⚠️ NapCat 已下载但未找到启动文件，请手动检查: $INSTALL_DIR"
-fi
-`, installDirPS)
+  Write-Output "✅ NapCat Shell (Windows) 安装完成"
+  Write-Output "📁 安装目录: $shellDir"
+  Write-Output "📝 请在通道管理中配置 QQ 并扫码登录"
+} else {
+  Write-Output "⚠️ NapCat 已下载但未找到启动文件，请手动检查: $INSTALL_DIR"
+}
+`, installDir)
 }
 
 func buildWeChatInstallScript(cfg *config.Config) string {

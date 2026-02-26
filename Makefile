@@ -67,6 +67,7 @@ installer: cross
 
 # 构建所有发布产物（交叉编译 + Windows 安装包）
 release: installer
+	cp bin/$(BINARY)-linux-amd64 bin/$(BINARY)
 	@echo "==> ClawPanel v$(VERSION) 全部发布产物:"
 	@ls -lh bin/
 
