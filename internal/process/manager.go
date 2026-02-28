@@ -2,6 +2,7 @@ package process
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -55,6 +56,9 @@ func (m *Manager) Start() error {
 	if m.status.Running {
 		return fmt.Errorf("OpenClaw 已在运行中 (PID: %d)", m.status.PID)
 	}
+
+	// 启动前确保 openclaw.json 配置正确
+	m.ensureOpenClawConfig()
 
 	// 查找 openclaw 可执行文件
 	openclawBin := m.findOpenClawBin()
@@ -237,6 +241,109 @@ func (m *Manager) waitForExit() {
 		m.mu.Unlock()
 		log.Printf("[ProcessMgr] OpenClaw 进程已退出 (code: %d)", m.status.ExitCode)
 	}
+}
+
+// ensureOpenClawConfig 启动前检查并修复 openclaw.json 关键配置
+// 确保 gateway.mode=local、channels.qq.wsUrl、plugins.entries.qq、plugins.installs.qq
+func (m *Manager) ensureOpenClawConfig() {
+	ocDir := m.cfg.OpenClawDir
+	if ocDir == "" {
+		home, _ := os.UserHomeDir()
+		ocDir = filepath.Join(home, ".openclaw")
+	}
+	cfgPath := filepath.Join(ocDir, "openclaw.json")
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return
+	}
+
+	changed := false
+
+	// Ensure gateway.mode = "local"
+	gw, _ := cfg["gateway"].(map[string]interface{})
+	if gw == nil {
+		gw = map[string]interface{}{}
+		cfg["gateway"] = gw
+	}
+	if gw["mode"] != "local" {
+		gw["mode"] = "local"
+		changed = true
+	}
+
+	// Ensure channels.qq with wsUrl
+	ch, _ := cfg["channels"].(map[string]interface{})
+	if ch == nil {
+		ch = map[string]interface{}{}
+		cfg["channels"] = ch
+	}
+	qq, _ := ch["qq"].(map[string]interface{})
+	if qq == nil {
+		qq = map[string]interface{}{}
+		ch["qq"] = qq
+	}
+	if qq["wsUrl"] == nil || qq["wsUrl"] == "" {
+		qq["wsUrl"] = "ws://127.0.0.1:3001"
+		changed = true
+	}
+	if qq["enabled"] == nil {
+		qq["enabled"] = true
+		changed = true
+	}
+
+	// Ensure plugins.entries.qq
+	pl, _ := cfg["plugins"].(map[string]interface{})
+	if pl == nil {
+		pl = map[string]interface{}{}
+		cfg["plugins"] = pl
+	}
+	ent, _ := pl["entries"].(map[string]interface{})
+	if ent == nil {
+		ent = map[string]interface{}{}
+		pl["entries"] = ent
+	}
+	if ent["qq"] == nil {
+		ent["qq"] = map[string]interface{}{"enabled": true}
+		changed = true
+	}
+
+	// Ensure plugins.installs.qq
+	ins, _ := pl["installs"].(map[string]interface{})
+	if ins == nil {
+		ins = map[string]interface{}{}
+		pl["installs"] = ins
+	}
+	if ins["qq"] == nil {
+		qqExtDir := filepath.Join(ocDir, "extensions", "qq")
+		if _, err := os.Stat(qqExtDir); err == nil {
+			ins["qq"] = map[string]interface{}{
+				"installPath": qqExtDir,
+				"source":      "archive",
+				"version":     "1.0.0",
+			}
+			changed = true
+		}
+	}
+
+	if !changed {
+		return
+	}
+
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		log.Printf("[ProcessMgr] openclaw.json 序列化失败: %v", err)
+		return
+	}
+	if err := os.WriteFile(cfgPath, out, 0644); err != nil {
+		log.Printf("[ProcessMgr] openclaw.json 写入失败: %v", err)
+		return
+	}
+	log.Println("[ProcessMgr] openclaw.json 配置已自动修复 (gateway.mode/channels.qq/plugins)")
 }
 
 // findOpenClawBin 查找 openclaw 可执行文件
