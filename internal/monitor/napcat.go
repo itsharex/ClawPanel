@@ -59,6 +59,7 @@ type NapCatMonitor struct {
 	checkInterval  time.Duration
 	reconnecting   bool          // true while a reconnect is in progress
 	offlineCount   int           // consecutive offline checks before triggering reconnect
+	loginFailCount int           // consecutive login check failures before declaring login_expired
 }
 
 // NewNapCatMonitor creates a new NapCat monitor
@@ -201,18 +202,23 @@ func (m *NapCatMonitor) checkAndUpdate() {
 	// Determine overall status
 	if !containerRunning {
 		m.status.Status = "stopped"
+		m.loginFailCount = 0
 	} else if qqLoggedIn {
 		m.status.Status = "online"
 		m.status.LastOnline = time.Now()
 		m.status.ReconnectCount = 0
 		m.offlineCount = 0
+		m.loginFailCount = 0
 	} else if wsConnected || httpAvailable {
-		// Container running, services up, but QQ not logged in
-		// Only mark as login_expired if we were previously online
-		if prevStatus == "online" {
+		// Container running, services up, but QQ not logged in.
+		// Require multiple consecutive failures before declaring login_expired
+		// to avoid false positives from transient HTTP timeouts.
+		m.loginFailCount++
+		if prevStatus == "online" && m.loginFailCount < 3 {
+			// Keep online status until confirmed offline (3 checks = ~90s)
+			m.status.Status = "online"
+		} else if prevStatus == "online" || prevStatus == "login_expired" {
 			m.status.Status = "login_expired"
-		} else if prevStatus == "login_expired" {
-			// Stay in login_expired state
 		} else {
 			m.status.Status = "offline"
 		}
@@ -261,7 +267,9 @@ func (m *NapCatMonitor) checkAndUpdate() {
 		}
 	}
 
-	// Auto-reconnect: only trigger after 3+ consecutive offline checks AND previous was online
+	// Auto-reconnect: only trigger for "offline" (services down), NOT for "login_expired"
+	// login_expired means container is fine but QQ session expired — restarting container won't help,
+	// the user needs to re-scan QR code.
 	if autoReconnect && currentStatus == "offline" && offlineCount >= 3 {
 		if reconnectCount < maxReconnect {
 			m.mu.Lock()
@@ -298,6 +306,9 @@ func (m *NapCatMonitor) doReconnect(reason string) error {
 		Time:   time.Now(),
 		Reason: reason,
 	}
+
+	// Clear cached credential since container restart invalidates the old session
+	cachedMonitorCred = ""
 
 	// Restart NapCat (Docker on Linux/macOS, Shell process on Windows)
 	out, err := restartNapCatPlatform(m.cfg)
@@ -395,6 +406,13 @@ func (m *NapCatMonitor) broadcastStatus() {
 }
 
 // --- Helpers ---
+
+// Cached NapCat WebUI credential to avoid re-authenticating every check cycle.
+// NapCat credentials are long-lived; re-auth only when this becomes stale.
+var (
+	cachedMonitorCred     string
+	cachedMonitorCredTime time.Time
+)
 
 func isContainerRunning(name string) bool {
 	out, err := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", name).Output()
@@ -505,64 +523,80 @@ func isPortReachable(port int) bool {
 }
 
 func checkQQLoginStatus(cfg *config.Config) (loggedIn bool, nickname string, qqID string) {
+	// Retry once on failure to reduce false positives from transient HTTP timeouts
+	for attempt := 0; attempt < 2; attempt++ {
+		loggedIn, nickname, qqID = doCheckQQLoginStatus(cfg)
+		if loggedIn {
+			return
+		}
+		if attempt == 0 {
+			time.Sleep(2 * time.Second)
+		}
+	}
+	return
+}
+
+func doCheckQQLoginStatus(cfg *config.Config) (loggedIn bool, nickname string, qqID string) {
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	// Get WebUI token: from local config file on Windows, from Docker on Linux
-	token := ""
-	if runtime.GOOS == "windows" {
-		// Read from local NapCat Shell config directory
-		napcatDir := findNapCatShellDir(cfg)
-		if napcatDir != "" {
-			webuiPath := filepath.Join(napcatDir, "config", "webui.json")
-			if data, err := os.ReadFile(webuiPath); err == nil {
+	// Use cached credential if available and fresh (< 10 minutes)
+	cred := ""
+	if cachedMonitorCred != "" && time.Since(cachedMonitorCredTime) < 10*time.Minute {
+		cred = cachedMonitorCred
+	} else {
+		// Get WebUI token: from local config file on Windows, from Docker on Linux
+		token := ""
+		if runtime.GOOS == "windows" {
+			napcatDir := findNapCatShellDir(cfg)
+			if napcatDir != "" {
+				webuiPath := filepath.Join(napcatDir, "config", "webui.json")
+				if data, err := os.ReadFile(webuiPath); err == nil {
+					var webui map[string]interface{}
+					if json.Unmarshal(data, &webui) == nil {
+						if t, ok := webui["token"].(string); ok && t != "" {
+							token = t
+						}
+					}
+				}
+			}
+		} else {
+			out, err := exec.Command("docker", "exec", "openclaw-qq", "cat", "/app/napcat/config/webui.json").Output()
+			if err == nil {
 				var webui map[string]interface{}
-				if json.Unmarshal(data, &webui) == nil {
+				if json.Unmarshal(out, &webui) == nil {
 					if t, ok := webui["token"].(string); ok && t != "" {
 						token = t
 					}
 				}
 			}
 		}
-	} else {
-		// Linux/macOS: read from Docker container
-		out, err := exec.Command("docker", "exec", "openclaw-qq", "cat", "/app/napcat/config/webui.json").Output()
-		if err == nil {
-			var webui map[string]interface{}
-			if json.Unmarshal(out, &webui) == nil {
-				if t, ok := webui["token"].(string); ok && t != "" {
-					token = t
-				}
+		if token == "" {
+			return false, "", ""
+		}
+
+		hash := sha256.Sum256([]byte(token + ".napcat"))
+		hashStr := fmt.Sprintf("%x", hash)
+		loginBody := fmt.Sprintf(`{"hash":"%s"}`, hashStr)
+		resp, err := client.Post("http://127.0.0.1:6099/api/auth/login", "application/json", strings.NewReader(loginBody))
+		if err != nil {
+			return false, "", ""
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		var loginResp map[string]interface{}
+		if json.Unmarshal(body, &loginResp) != nil {
+			return false, "", ""
+		}
+		if code, ok := loginResp["code"].(float64); ok && code == 0 {
+			if data, ok := loginResp["data"].(map[string]interface{}); ok {
+				cred, _ = data["Credential"].(string)
 			}
 		}
-	}
-	if token == "" {
-		return false, "", ""
-	}
-
-	// Auth using SHA256 hash (same method as bot.go napcatAuth)
-	hash := sha256.Sum256([]byte(token + ".napcat"))
-	hashStr := fmt.Sprintf("%x", hash)
-	loginBody := fmt.Sprintf(`{"hash":"%s"}`, hashStr)
-	resp, err := client.Post("http://127.0.0.1:6099/api/auth/login", "application/json", strings.NewReader(loginBody))
-	if err != nil {
-		return false, "", ""
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var loginResp map[string]interface{}
-	if json.Unmarshal(body, &loginResp) != nil {
-		return false, "", ""
-	}
-
-	// Extract credential from response: {code: 0, data: {Credential: "..."}}
-	cred := ""
-	if code, ok := loginResp["code"].(float64); ok && code == 0 {
-		if data, ok := loginResp["data"].(map[string]interface{}); ok {
-			cred, _ = data["Credential"].(string)
+		if cred == "" {
+			return false, "", ""
 		}
-	}
-	if cred == "" {
-		return false, "", ""
+		cachedMonitorCred = cred
+		cachedMonitorCredTime = time.Now()
 	}
 
 	// Check login status
@@ -571,6 +605,8 @@ func checkQQLoginStatus(cfg *config.Config) (loggedIn bool, nickname string, qqI
 	req.Header.Set("Authorization", "Bearer "+cred)
 	resp2, err := client.Do(req)
 	if err != nil {
+		// HTTP failure — clear cached cred so next check re-auths
+		cachedMonitorCred = ""
 		return false, "", ""
 	}
 	defer resp2.Body.Close()
@@ -580,7 +616,12 @@ func checkQQLoginStatus(cfg *config.Config) (loggedIn bool, nickname string, qqI
 		return false, "", ""
 	}
 
-	// Response: {code: 0, data: {isLogin: true/false}}
+	// If unauthorized, clear cached cred and return false (will retry with fresh cred)
+	if code, ok := statusResp["code"].(float64); ok && code == -1 {
+		cachedMonitorCred = ""
+		return false, "", ""
+	}
+
 	if code, ok := statusResp["code"].(float64); !ok || code != 0 {
 		return false, "", ""
 	}
