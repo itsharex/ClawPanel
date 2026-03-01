@@ -1,0 +1,1026 @@
+package updater
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	UpdaterPort        = 19528
+	TokenValidDuration = 5 * time.Minute
+	TokenSecret        = "clawpanel-updater-secret-2026"
+
+	GitHubReleaseAPI  = "https://api.github.com/repos/zhaoxinyi02/ClawPanel/releases/latest"
+	AccelUpdateJSON   = "http://39.102.53.188:16198/clawpanel/update.json"
+	GitHubDownloadBase = "https://github.com/zhaoxinyi02/ClawPanel/releases/download"
+	AccelDownloadBase  = "http://39.102.53.188:16198/clawpanel/releases"
+)
+
+// UpdateStep represents a step in the update process
+type UpdateStep struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"` // pending, running, done, error, skipped
+	Message string `json:"message,omitempty"`
+}
+
+// UpdateState represents the full update state
+type UpdateState struct {
+	Phase      string       `json:"phase"` // idle, validating, checking, stopping, downloading, backing_up, replacing, starting, done, error, rolled_back
+	Steps      []UpdateStep `json:"steps"`
+	Progress   int          `json:"progress"` // 0-100
+	Message    string       `json:"message"`
+	Log        []string     `json:"log"`
+	Error      string       `json:"error,omitempty"`
+	StartedAt  string       `json:"started_at,omitempty"`
+	FinishedAt string       `json:"finished_at,omitempty"`
+	Source     string       `json:"source,omitempty"` // github, accel, upload
+	FromVer    string       `json:"from_ver,omitempty"`
+	ToVer      string       `json:"to_ver,omitempty"`
+}
+
+// VersionInfo from remote
+type VersionInfo struct {
+	LatestVersion string            `json:"latest_version"`
+	ReleaseTime   string            `json:"release_time"`
+	ReleaseNote   string            `json:"release_note"`
+	DownloadURLs  map[string]string `json:"download_urls"`
+	SHA256        map[string]string `json:"sha256"`
+	MajorChange   bool              `json:"major_change,omitempty"`
+	ChangeWarning string            `json:"change_warning,omitempty"`
+}
+
+// Server is the independent updater HTTP server
+type Server struct {
+	currentVersion string
+	dataDir        string
+	panelBin       string // path to clawpanel binary
+	panelPort      int
+	mu             sync.Mutex
+	state          UpdateState
+	srv            *http.Server
+	running        bool
+}
+
+// NewServer creates a new updater server
+func NewServer(currentVersion, dataDir string, panelPort int) *Server {
+	bin, _ := os.Executable()
+	bin, _ = filepath.EvalSymlinks(bin)
+	return &Server{
+		currentVersion: currentVersion,
+		dataDir:        dataDir,
+		panelBin:       bin,
+		panelPort:      panelPort,
+		state: UpdateState{
+			Phase: "idle",
+			Steps: defaultSteps(),
+			Log:   []string{},
+		},
+	}
+}
+
+func defaultSteps() []UpdateStep {
+	return []UpdateStep{
+		{Name: "验证授权", Status: "pending"},
+		{Name: "检测版本", Status: "pending"},
+		{Name: "停止服务", Status: "pending"},
+		{Name: "下载更新", Status: "pending"},
+		{Name: "备份文件", Status: "pending"},
+		{Name: "替换文件", Status: "pending"},
+		{Name: "启动服务", Status: "pending"},
+	}
+}
+
+// GenerateToken generates a temporary auth token for the updater page
+func GenerateToken(panelPort int) string {
+	now := time.Now().Unix()
+	payload := fmt.Sprintf("%d:%d", panelPort, now)
+	mac := hmac.New(sha256.New, []byte(TokenSecret))
+	mac.Write([]byte(payload))
+	sig := hex.EncodeToString(mac.Sum(nil))
+	return fmt.Sprintf("%s.%d", sig, now)
+}
+
+// ValidateToken validates a token
+func ValidateToken(token string, panelPort int) bool {
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	sig := parts[0]
+	tsStr := parts[1]
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		return false
+	}
+	// Check expiry
+	if time.Since(time.Unix(ts, 0)) > TokenValidDuration {
+		return false
+	}
+	// Verify signature
+	payload := fmt.Sprintf("%d:%d", panelPort, ts)
+	mac := hmac.New(sha256.New, []byte(TokenSecret))
+	mac.Write([]byte(payload))
+	expectedSig := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(sig), []byte(expectedSig))
+}
+
+// Start starts the updater HTTP server
+func (s *Server) Start() {
+	mux := http.NewServeMux()
+
+	// Serve the updater frontend page
+	mux.HandleFunc("/updater", s.handlePage)
+	mux.HandleFunc("/updater/", s.handlePage)
+
+	// API endpoints
+	mux.HandleFunc("/updater/api/validate", s.handleValidate)
+	mux.HandleFunc("/updater/api/check-version", s.handleCheckVersion)
+	mux.HandleFunc("/updater/api/start-update", s.handleStartUpdate)
+	mux.HandleFunc("/updater/api/upload-update", s.handleUploadUpdate)
+	mux.HandleFunc("/updater/api/progress", s.handleProgress)
+
+	s.srv = &http.Server{
+		Addr:    fmt.Sprintf("0.0.0.0:%d", UpdaterPort),
+		Handler: mux,
+	}
+
+	s.running = true
+	go func() {
+		log.Printf("[Updater] 独立更新服务已启动 → http://0.0.0.0:%d/updater", UpdaterPort)
+		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[Updater] 服务启动失败: %v", err)
+		}
+		s.running = false
+	}()
+}
+
+// Stop stops the updater server
+func (s *Server) Stop() {
+	if s.srv != nil {
+		s.srv.Close()
+	}
+}
+
+// IsRunning returns whether the updater server is running
+func (s *Server) IsRunning() bool {
+	return s.running
+}
+
+// --- HTTP Handlers ---
+
+func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
+	// Only allow access with valid token parameter
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "⛔ 禁止直接访问更新页面。请从 ClawPanel 面板的「版本管理」页面点击「前往更新」进入。", http.StatusForbidden)
+		return
+	}
+	if !ValidateToken(token, s.panelPort) {
+		http.Error(w, "⛔ 授权令牌已失效或无效。请返回 ClawPanel 面板重新点击「前往更新」。", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(updaterHTML(s.currentVersion, token, s.panelPort)))
+}
+
+func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
+	s.setCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	token := r.URL.Query().Get("token")
+	valid := ValidateToken(token, s.panelPort)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    valid,
+		"error": ternary(!valid, "授权令牌无效或已过期", ""),
+	})
+}
+
+func (s *Server) handleCheckVersion(w http.ResponseWriter, r *http.Request) {
+	s.setCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if !s.checkToken(w, r) {
+		return
+	}
+
+	info, source, err := s.fetchLatestVersion()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": false, "error": err.Error(),
+		})
+		return
+	}
+
+	hasUpdate := info.LatestVersion != "" && info.LatestVersion != s.currentVersion &&
+		isNewerVersion(info.LatestVersion, s.currentVersion)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":             true,
+		"currentVersion": s.currentVersion,
+		"latestVersion":  info.LatestVersion,
+		"releaseTime":    info.ReleaseTime,
+		"releaseNote":    info.ReleaseNote,
+		"hasUpdate":      hasUpdate,
+		"source":         source,
+		"majorChange":    info.MajorChange,
+		"changeWarning":  info.ChangeWarning,
+	})
+}
+
+func (s *Server) handleStartUpdate(w http.ResponseWriter, r *http.Request) {
+	s.setCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	if !s.checkToken(w, r) {
+		return
+	}
+
+	s.mu.Lock()
+	if s.state.Phase != "idle" && s.state.Phase != "done" && s.state.Phase != "error" && s.state.Phase != "rolled_back" {
+		s.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": false, "error": "更新正在进行中",
+		})
+		return
+	}
+	s.state = UpdateState{
+		Phase:     "validating",
+		Steps:     defaultSteps(),
+		Log:       []string{},
+		StartedAt: time.Now().Format(time.RFC3339),
+	}
+	s.mu.Unlock()
+
+	go s.doUpdate("")
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func (s *Server) handleUploadUpdate(w http.ResponseWriter, r *http.Request) {
+	s.setCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	if !s.checkToken(w, r) {
+		return
+	}
+
+	s.mu.Lock()
+	if s.state.Phase != "idle" && s.state.Phase != "done" && s.state.Phase != "error" && s.state.Phase != "rolled_back" {
+		s.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": false, "error": "更新正在进行中",
+		})
+		return
+	}
+	s.mu.Unlock()
+
+	// Parse multipart (max 200MB)
+	r.ParseMultipartForm(200 << 20)
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": false, "error": "读取上传文件失败: " + err.Error(),
+		})
+		return
+	}
+	defer file.Close()
+
+	// Save to temp
+	tmpDir := filepath.Join(s.dataDir, "update-tmp")
+	os.MkdirAll(tmpDir, 0755)
+	tmpFile := filepath.Join(tmpDir, "clawpanel-upload")
+	if runtime.GOOS == "windows" {
+		tmpFile += ".exe"
+	}
+
+	out, err := os.Create(tmpFile)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": false, "error": "保存文件失败: " + err.Error(),
+		})
+		return
+	}
+	io.Copy(out, file)
+	out.Close()
+	os.Chmod(tmpFile, 0755)
+
+	s.mu.Lock()
+	s.state = UpdateState{
+		Phase:     "validating",
+		Steps:     defaultSteps(),
+		Log:       []string{},
+		StartedAt: time.Now().Format(time.RFC3339),
+		Source:    "upload",
+	}
+	// Skip download step for upload
+	s.state.Steps[3].Status = "skipped"
+	s.state.Steps[3].Message = "使用本地上传文件"
+	s.mu.Unlock()
+
+	go s.doUpdateWithFile(tmpFile)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
+	s.setCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	s.mu.Lock()
+	state := s.state
+	logCopy := make([]string, len(s.state.Log))
+	copy(logCopy, s.state.Log)
+	state.Log = logCopy
+	stepsCopy := make([]UpdateStep, len(s.state.Steps))
+	copy(stepsCopy, s.state.Steps)
+	state.Steps = stepsCopy
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"state": state,
+	})
+}
+
+// --- Update Logic ---
+
+func (s *Server) doUpdate(preferredSource string) {
+	// Step 1: Validate
+	s.setStep(0, "running", "验证授权中...")
+	s.logMsg("🔐 验证更新授权...")
+	s.setStep(0, "done", "授权验证通过")
+	s.setProgress(5)
+
+	// Step 2: Check version
+	s.setStep(1, "running", "正在检测最新版本...")
+	s.logMsg("🔍 检测最新版本...")
+	info, source, err := s.fetchLatestVersion()
+	if err != nil {
+		s.setStepError(1, "检测版本失败: "+err.Error())
+		s.setError("检测版本失败: " + err.Error())
+		return
+	}
+	if !isNewerVersion(info.LatestVersion, s.currentVersion) {
+		s.setStep(1, "done", "当前已是最新版本")
+		s.logMsg("✅ 当前版本 %s 已是最新", s.currentVersion)
+		s.setPhase("done")
+		return
+	}
+	s.mu.Lock()
+	s.state.FromVer = s.currentVersion
+	s.state.ToVer = info.LatestVersion
+	s.state.Source = source
+	s.mu.Unlock()
+	s.setStep(1, "done", fmt.Sprintf("发现新版本 %s → %s (线路: %s)", s.currentVersion, info.LatestVersion, source))
+	s.logMsg("📦 %s → %s (线路: %s)", s.currentVersion, info.LatestVersion, source)
+	s.setProgress(15)
+
+	// Step 3: Stop service
+	s.setStep(2, "running", "正在停止 ClawPanel 服务...")
+	s.logMsg("⏹️ 停止 ClawPanel 服务...")
+	if err := s.stopPanel(); err != nil {
+		s.logMsg("⚠️ 停止服务出错: %v (继续更新)", err)
+	}
+	s.setStep(2, "done", "ClawPanel 服务已停止")
+	s.setProgress(25)
+
+	// Step 4: Download
+	s.setStep(3, "running", "正在下载更新包...")
+	platformKey := getPlatformKey()
+	downloadURL := ""
+
+	// Try GitHub first, fallback to accel
+	if source == "github" {
+		tag := info.LatestVersion
+		if !strings.HasPrefix(tag, "v") {
+			tag = "v" + tag
+		}
+		suffix := "clawpanel-" + strings.Replace(platformKey, "_", "-", -1)
+		if runtime.GOOS == "windows" {
+			suffix += ".exe"
+		}
+		downloadURL = fmt.Sprintf("%s/%s/%s", GitHubDownloadBase, tag, suffix)
+	} else if urls, ok := info.DownloadURLs[platformKey]; ok {
+		downloadURL = urls
+	}
+
+	if downloadURL == "" {
+		s.setStepError(3, "未找到适用于当前平台的下载链接: "+platformKey)
+		s.setError("未找到适用于当前平台的下载链接")
+		return
+	}
+
+	tmpDir := filepath.Join(s.dataDir, "update-tmp")
+	os.MkdirAll(tmpDir, 0755)
+	tmpFile := filepath.Join(tmpDir, "clawpanel-new")
+	if runtime.GOOS == "windows" {
+		tmpFile += ".exe"
+	}
+
+	s.logMsg("📥 下载: %s", downloadURL)
+	if err := s.downloadFile(downloadURL, tmpFile, source); err != nil {
+		// Fallback to other source
+		s.logMsg("⚠️ %s 线路下载失败: %v, 尝试备用线路...", source, err)
+		fallbackURL := ""
+		fallbackSource := ""
+		if source == "github" {
+			// Try accel
+			if urls, ok := info.DownloadURLs[platformKey]; ok {
+				fallbackURL = urls
+				fallbackSource = "accel"
+			}
+		} else {
+			// Try GitHub
+			tag := info.LatestVersion
+			if !strings.HasPrefix(tag, "v") {
+				tag = "v" + tag
+			}
+			suffix := "clawpanel-" + strings.Replace(platformKey, "_", "-", -1)
+			if runtime.GOOS == "windows" {
+				suffix += ".exe"
+			}
+			fallbackURL = fmt.Sprintf("%s/%s/%s", GitHubDownloadBase, tag, suffix)
+			fallbackSource = "github"
+		}
+		if fallbackURL != "" {
+			s.logMsg("📥 切换至 %s 线路下载...", fallbackSource)
+			if err2 := s.downloadFile(fallbackURL, tmpFile, fallbackSource); err2 != nil {
+				s.setStepError(3, fmt.Sprintf("两条线路均下载失败"))
+				s.setError(fmt.Sprintf("下载失败: %s 线路: %v; %s 线路: %v", source, err, fallbackSource, err2))
+				return
+			}
+			s.mu.Lock()
+			s.state.Source = fallbackSource
+			s.mu.Unlock()
+		} else {
+			s.setStepError(3, "下载失败: "+err.Error())
+			s.setError("下载失败: " + err.Error())
+			return
+		}
+	}
+	s.setStep(3, "done", "下载完成")
+	s.logMsg("✅ 下载完成")
+	s.setProgress(60)
+
+	// Verify SHA256
+	expectedSHA := ""
+	if info.SHA256 != nil {
+		expectedSHA = info.SHA256[platformKey]
+	}
+	if expectedSHA != "" {
+		s.logMsg("🔒 校验文件 SHA256...")
+		actualSHA, err := fileSHA256(tmpFile)
+		if err != nil {
+			s.setStepError(3, "校验失败: "+err.Error())
+			s.setError("SHA256 校验失败: " + err.Error())
+			return
+		}
+		if !strings.EqualFold(actualSHA, expectedSHA) {
+			s.setStepError(3, "SHA256 不匹配，文件可能损坏")
+			s.setError(fmt.Sprintf("SHA256 校验失败: 期望 %s..., 实际 %s...", expectedSHA[:16], actualSHA[:16]))
+			os.Remove(tmpFile)
+			return
+		}
+		s.logMsg("✅ SHA256 校验通过")
+	} else {
+		s.logMsg("⚠️ 远程未提供 SHA256，跳过校验")
+	}
+
+	// Continue with file replacement
+	s.doReplace(tmpFile)
+}
+
+func (s *Server) doUpdateWithFile(tmpFile string) {
+	// Step 1: Validate
+	s.setStep(0, "running", "验证授权中...")
+	s.logMsg("🔐 验证更新授权...")
+	s.setStep(0, "done", "授权验证通过")
+	s.setProgress(5)
+
+	// Step 2: Check uploaded file
+	s.setStep(1, "running", "检测上传文件...")
+	fi, err := os.Stat(tmpFile)
+	if err != nil || fi.Size() < 1024 {
+		s.setStepError(1, "上传文件无效")
+		s.setError("上传文件无效或过小")
+		return
+	}
+	s.mu.Lock()
+	s.state.FromVer = s.currentVersion
+	s.state.ToVer = "离线上传"
+	s.state.Source = "upload"
+	s.mu.Unlock()
+	s.setStep(1, "done", fmt.Sprintf("上传文件有效 (%.1f MB)", float64(fi.Size())/1048576))
+	s.logMsg("📦 上传文件: %.1f MB", float64(fi.Size())/1048576)
+	s.setProgress(15)
+
+	// Step 3: Stop service
+	s.setStep(2, "running", "正在停止 ClawPanel 服务...")
+	s.logMsg("⏹️ 停止 ClawPanel 服务...")
+	if err := s.stopPanel(); err != nil {
+		s.logMsg("⚠️ 停止服务出错: %v (继续更新)", err)
+	}
+	s.setStep(2, "done", "ClawPanel 服务已停止")
+	s.setProgress(25)
+
+	// Step 4: Skip download (already uploaded)
+	s.setProgress(60)
+
+	// Continue with file replacement
+	s.doReplace(tmpFile)
+}
+
+func (s *Server) doReplace(tmpFile string) {
+	// Step 5: Backup
+	s.setStep(4, "running", "正在备份当前程序...")
+	s.logMsg("💾 备份当前程序...")
+	backupPath := s.panelBin + ".bak"
+	if err := copyFile(s.panelBin, backupPath); err != nil {
+		s.logMsg("⚠️ 备份失败: %v (继续更新)", err)
+		s.setStep(4, "done", "备份跳过 ("+err.Error()+")")
+	} else {
+		s.setStep(4, "done", "已备份至 "+filepath.Base(backupPath))
+		s.logMsg("✅ 已备份至 %s", backupPath)
+	}
+	s.setProgress(70)
+
+	// Step 6: Replace
+	s.setStep(5, "running", "正在替换程序文件...")
+	s.logMsg("🔄 替换程序文件...")
+
+	if runtime.GOOS == "windows" {
+		// Windows: rename old, copy new
+		os.Remove(s.panelBin + ".old")
+		os.Rename(s.panelBin, s.panelBin+".old")
+		if err := copyFile(tmpFile, s.panelBin); err != nil {
+			// Rollback
+			s.logMsg("❌ 替换失败，回滚...")
+			os.Rename(s.panelBin+".old", s.panelBin)
+			s.setStepError(5, "替换失败，已回滚: "+err.Error())
+			s.setError("替换失败，已回滚: " + err.Error())
+			s.startPanel()
+			return
+		}
+		os.Remove(s.panelBin + ".old")
+	} else {
+		// Linux/macOS: remove + copy
+		if err := os.Remove(s.panelBin); err != nil {
+			s.logMsg("⚠️ 删除旧文件失败: %v, 尝试覆盖写入...", err)
+		}
+		if err := copyFile(tmpFile, s.panelBin); err != nil {
+			// Rollback
+			s.logMsg("❌ 替换失败，回滚...")
+			if _, berr := os.Stat(backupPath); berr == nil {
+				copyFile(backupPath, s.panelBin)
+			}
+			os.Chmod(s.panelBin, 0755)
+			s.setStepError(5, "替换失败，已回滚: "+err.Error())
+			s.setError("替换失败，已回滚: " + err.Error())
+			s.startPanel()
+			return
+		}
+	}
+	os.Chmod(s.panelBin, 0755)
+	s.setStep(5, "done", "程序替换完成")
+	s.logMsg("✅ 程序替换完成")
+	s.setProgress(85)
+
+	// Clean up temp
+	os.Remove(tmpFile)
+	os.RemoveAll(filepath.Join(s.dataDir, "update-tmp"))
+
+	// Step 7: Start service
+	s.setStep(6, "running", "正在启动 ClawPanel 服务...")
+	s.logMsg("🚀 启动 ClawPanel 服务...")
+	if err := s.startPanel(); err != nil {
+		// Try rollback
+		s.logMsg("❌ 启动失败: %v, 尝试回滚...", err)
+		if _, berr := os.Stat(backupPath); berr == nil {
+			os.Remove(s.panelBin)
+			copyFile(backupPath, s.panelBin)
+			os.Chmod(s.panelBin, 0755)
+			s.logMsg("🔄 已回滚至备份文件，尝试重新启动...")
+			if err2 := s.startPanel(); err2 != nil {
+				s.setStepError(6, "启动失败且回滚后仍无法启动: "+err2.Error())
+				s.setError("启动失败且回滚后仍无法启动，请手动处理")
+				s.setPhase("rolled_back")
+				return
+			}
+		} else {
+			s.setStepError(6, "启动失败: "+err.Error())
+			s.setError("启动失败: " + err.Error())
+			return
+		}
+		s.setStep(6, "done", "已回滚并启动旧版本")
+		s.logMsg("⚠️ 已回滚并启动旧版本")
+		s.setPhase("rolled_back")
+		return
+	}
+
+	// Verify service is actually running
+	time.Sleep(3 * time.Second)
+	if !s.isPanelRunning() {
+		s.logMsg("⚠️ 服务似乎未成功启动，等待更长时间...")
+		time.Sleep(5 * time.Second)
+		if !s.isPanelRunning() {
+			s.logMsg("❌ 服务启动失败，尝试回滚...")
+			if _, berr := os.Stat(backupPath); berr == nil {
+				exec.Command("systemctl", "stop", "clawpanel").Run()
+				time.Sleep(1 * time.Second)
+				os.Remove(s.panelBin)
+				copyFile(backupPath, s.panelBin)
+				os.Chmod(s.panelBin, 0755)
+				s.startPanel()
+			}
+			s.setStepError(6, "新版本启动失败，已回滚")
+			s.setPhase("rolled_back")
+			return
+		}
+	}
+
+	s.setStep(6, "done", "ClawPanel 服务已启动")
+	s.logMsg("✅ ClawPanel 服务已启动")
+	s.setProgress(100)
+
+	s.mu.Lock()
+	s.state.Phase = "done"
+	s.state.Message = "更新完成！"
+	s.state.FinishedAt = time.Now().Format(time.RFC3339)
+	s.mu.Unlock()
+	s.logMsg("🎉 更新完成！")
+
+	// Record update log
+	s.recordUpdateLog()
+}
+
+func (s *Server) stopPanel() error {
+	if runtime.GOOS == "windows" {
+		exec.Command("net", "stop", "ClawPanel").Run()
+		time.Sleep(2 * time.Second)
+		exec.Command("taskkill", "/F", "/IM", "clawpanel.exe").Run()
+	} else {
+		exec.Command("systemctl", "stop", "clawpanel").Run()
+		time.Sleep(2 * time.Second)
+		// Kill if still running
+		for i := 0; i < 5; i++ {
+			if !s.isPanelRunning() {
+				break
+			}
+			exec.Command("pkill", "-f", "clawpanel").Run()
+			time.Sleep(1 * time.Second)
+		}
+	}
+	return nil
+}
+
+func (s *Server) startPanel() error {
+	if runtime.GOOS == "windows" {
+		err := exec.Command("net", "start", "ClawPanel").Run()
+		if err != nil {
+			// Try direct start
+			cmd := exec.Command(s.panelBin)
+			cmd.Dir = filepath.Dir(s.panelBin)
+			return cmd.Start()
+		}
+		return nil
+	}
+	err := exec.Command("systemctl", "start", "clawpanel").Run()
+	if err != nil {
+		// Try direct start
+		cmd := exec.Command("bash", "-c", fmt.Sprintf("nohup %s >/dev/null 2>&1 &", s.panelBin))
+		return cmd.Run()
+	}
+	return nil
+}
+
+func (s *Server) isPanelRunning() bool {
+	if runtime.GOOS == "windows" {
+		out, _ := exec.Command("tasklist", "/FI", "IMAGENAME eq clawpanel.exe", "/NH").Output()
+		return strings.Contains(string(out), "clawpanel")
+	}
+	out, _ := exec.Command("pgrep", "-x", "clawpanel").Output()
+	return len(strings.TrimSpace(string(out))) > 0
+}
+
+func (s *Server) fetchLatestVersion() (*VersionInfo, string, error) {
+	// Try accel server first (faster in China)
+	info, err := s.fetchFromAccel()
+	if err == nil {
+		return info, "accel", nil
+	}
+	log.Printf("[Updater] 加速服务器请求失败: %v, 尝试 GitHub...", err)
+
+	// Fallback to GitHub
+	info, err = s.fetchFromGitHub()
+	if err == nil {
+		return info, "github", nil
+	}
+	return nil, "", fmt.Errorf("所有线路均失败: %v", err)
+}
+
+func (s *Server) fetchFromAccel() (*VersionInfo, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(AccelUpdateJSON)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var info VersionInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+func (s *Server) fetchFromGitHub() (*VersionInfo, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(GitHubReleaseAPI)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var release struct {
+		TagName string `json:"tag_name"`
+		Body    string `json:"body"`
+		PubAt   string `json:"published_at"`
+		Assets  []struct {
+			Name string `json:"name"`
+			URL  string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, err
+	}
+
+	info := &VersionInfo{
+		LatestVersion: strings.TrimPrefix(release.TagName, "v"),
+		ReleaseTime:   release.PubAt,
+		ReleaseNote:   release.Body,
+		DownloadURLs:  map[string]string{},
+		SHA256:        map[string]string{},
+	}
+	for _, a := range release.Assets {
+		name := strings.ToLower(a.Name)
+		if strings.Contains(name, "linux") && strings.Contains(name, "amd64") && !strings.Contains(name, "setup") {
+			info.DownloadURLs["linux_amd64"] = a.URL
+		} else if strings.Contains(name, "linux") && strings.Contains(name, "arm64") {
+			info.DownloadURLs["linux_arm64"] = a.URL
+		} else if strings.Contains(name, "darwin") && strings.Contains(name, "amd64") {
+			info.DownloadURLs["darwin_amd64"] = a.URL
+		} else if strings.Contains(name, "darwin") && strings.Contains(name, "arm64") {
+			info.DownloadURLs["darwin_arm64"] = a.URL
+		} else if strings.Contains(name, "windows") && strings.Contains(name, "amd64") && !strings.Contains(name, "setup") {
+			info.DownloadURLs["windows_amd64"] = a.URL
+		}
+	}
+	return info, nil
+}
+
+func (s *Server) downloadFile(url, dest, source string) error {
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	totalSize := resp.ContentLength
+	var downloaded int64
+	buf := make([]byte, 64*1024)
+
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := f.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			downloaded += int64(n)
+			if totalSize > 0 {
+				pct := int(float64(downloaded) / float64(totalSize) * 35) + 25 // 25-60%
+				s.setProgress(pct)
+				s.setStep(3, "running", fmt.Sprintf("下载中 %.1f MB / %.1f MB (%d%%)",
+					float64(downloaded)/1048576, float64(totalSize)/1048576,
+					int(float64(downloaded)/float64(totalSize)*100)))
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) recordUpdateLog() {
+	s.mu.Lock()
+	state := s.state
+	s.mu.Unlock()
+
+	logEntry := map[string]interface{}{
+		"time":       time.Now().Format(time.RFC3339),
+		"from":       state.FromVer,
+		"to":         state.ToVer,
+		"source":     state.Source,
+		"result":     state.Phase,
+		"started_at": state.StartedAt,
+		"finished_at": state.FinishedAt,
+	}
+
+	logFile := filepath.Join(s.dataDir, "update_history.json")
+	var history []map[string]interface{}
+	if data, err := os.ReadFile(logFile); err == nil {
+		json.Unmarshal(data, &history)
+	}
+	history = append(history, logEntry)
+	// Keep last 50
+	if len(history) > 50 {
+		history = history[len(history)-50:]
+	}
+	data, _ := json.MarshalIndent(history, "", "  ")
+	os.WriteFile(logFile, data, 0644)
+}
+
+// --- State helpers ---
+
+func (s *Server) setStep(idx int, status, message string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx < len(s.state.Steps) {
+		s.state.Steps[idx].Status = status
+		s.state.Steps[idx].Message = message
+	}
+}
+
+func (s *Server) setStepError(idx int, message string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx < len(s.state.Steps) {
+		s.state.Steps[idx].Status = "error"
+		s.state.Steps[idx].Message = message
+	}
+	s.state.Phase = "error"
+	s.state.FinishedAt = time.Now().Format(time.RFC3339)
+}
+
+func (s *Server) setProgress(pct int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Progress = pct
+}
+
+func (s *Server) setPhase(phase string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Phase = phase
+	if phase == "done" || phase == "error" || phase == "rolled_back" {
+		s.state.FinishedAt = time.Now().Format(time.RFC3339)
+	}
+}
+
+func (s *Server) setError(msg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Phase = "error"
+	s.state.Error = msg
+	s.state.Message = "更新失败"
+	s.state.FinishedAt = time.Now().Format(time.RFC3339)
+	s.state.Log = append(s.state.Log, "❌ "+msg)
+}
+
+func (s *Server) logMsg(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	log.Printf("[Updater] %s", msg)
+	s.mu.Lock()
+	s.state.Log = append(s.state.Log, msg)
+	s.mu.Unlock()
+}
+
+func (s *Server) setCORS(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	w.Header().Set("Content-Type", "application/json")
+}
+
+func (s *Server) checkToken(w http.ResponseWriter, r *http.Request) bool {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		token = r.Header.Get("X-Update-Token")
+	}
+	if !ValidateToken(token, s.panelPort) {
+		w.WriteHeader(403)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": false, "error": "授权令牌无效或已过期",
+		})
+		return false
+	}
+	return true
+}
+
+// --- Utilities ---
+
+func getPlatformKey() string {
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	return goos + "_" + goarch
+}
+
+func isNewerVersion(latest, current string) bool {
+	latest = strings.TrimPrefix(latest, "v")
+	current = strings.TrimPrefix(current, "v")
+	lp := strings.Split(latest, ".")
+	cp := strings.Split(current, ".")
+	for i := 0; i < len(lp) && i < len(cp); i++ {
+		lv := 0
+		cv := 0
+		fmt.Sscanf(lp[i], "%d", &lv)
+		fmt.Sscanf(cp[i], "%d", &cv)
+		if lv > cv {
+			return true
+		}
+		if lv < cv {
+			return false
+		}
+	}
+	return len(lp) > len(cp)
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+func ternary(cond bool, a, b string) string {
+	if cond {
+		return a
+	}
+	return b
+}

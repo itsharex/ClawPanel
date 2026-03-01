@@ -15,6 +15,7 @@ import (
 	"github.com/zhaoxinyi02/ClawPanel/internal/config"
 	"github.com/zhaoxinyi02/ClawPanel/internal/process"
 	"github.com/zhaoxinyi02/ClawPanel/internal/update"
+	updaterPkg "github.com/zhaoxinyi02/ClawPanel/internal/updater"
 )
 
 // GetVersion 获取 OpenClaw 版本信息
@@ -440,5 +441,39 @@ func MarkUpdatePopupShown(updater *update.Updater) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		updater.MarkPopupShown()
 		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
+}
+
+// GenerateUpdateToken 生成更新工具的临时授权令牌
+func GenerateUpdateToken(cfg *config.Config, panelPort int) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := updaterPkg.GenerateToken(panelPort)
+		updaterPort := updaterPkg.UpdaterPort
+		// Extract hostname from request Host (may or may not include port)
+		host := c.Request.Host
+		if idx := strings.LastIndex(host, ":"); idx > 0 {
+			host = host[:idx]
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":          true,
+			"token":       token,
+			"updaterPort": updaterPort,
+			"updaterURL":  fmt.Sprintf("http://%s:%d/updater?token=%s", host, updaterPort, token),
+		})
+	}
+}
+
+// GetUpdateHistory 获取更新历史记录
+func GetUpdateHistory(cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		logFile := filepath.Join(cfg.DataDir, "update_history.json")
+		var history []map[string]interface{}
+		if data, err := os.ReadFile(logFile); err == nil {
+			json.Unmarshal(data, &history)
+		}
+		if history == nil {
+			history = []map[string]interface{}{}
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "history": history})
 	}
 }

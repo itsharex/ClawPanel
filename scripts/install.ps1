@@ -1,5 +1,5 @@
 # ============================================================
-# ClawPanel v5.0.8 一键安装脚本 (Windows PowerShell)
+# ClawPanel v5.0.9 一键安装脚本 (Windows PowerShell)
 # 用法 (管理员 PowerShell):
 #   irm https://raw.githubusercontent.com/zhaoxinyi02/ClawPanel/main/scripts/install.ps1 | iex
 # 或:
@@ -8,9 +8,9 @@
 
 $ErrorActionPreference = "Stop"
 
-$VERSION = "5.0.8"
+$VERSION = "5.0.9"
 $INSTALL_DIR = "C:\ClawPanel"
-$BINARY_NAME = "clawpanel-windows-amd64.exe"
+$BINARY_NAME = "clawpanel-v${VERSION}-windows-amd64.exe"
 $REPO = "zhaoxinyi02/ClawPanel"
 $SERVICE_NAME = "ClawPanel"
 $PORT = "19527"

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# ClawPanel v5.0.8 一键安装脚本 (Linux/macOS)
+# ClawPanel v5.0.9 一键安装脚本 (Linux/macOS)
 # 用法:
 #   curl -sSO https://raw.githubusercontent.com/zhaoxinyi02/ClawPanel/main/scripts/install.sh && sudo bash install.sh
 # 或:
@@ -9,7 +9,7 @@
 
 set -e
 
-VERSION="5.0.8"
+VERSION="5.0.9"
 INSTALL_DIR="/opt/clawpanel"
 SERVICE_NAME="clawpanel"
 BINARY_NAME="clawpanel"
@@ -93,7 +93,7 @@ main() {
 
     local SYS_OS=$(detect_os)
     local SYS_ARCH=$(detect_arch)
-    local BINARY_FILE="${BINARY_NAME}-${SYS_OS}-${SYS_ARCH}"
+    local BINARY_FILE="${BINARY_NAME}-v${VERSION}-${SYS_OS}-${SYS_ARCH}"
     local TOTAL_STEPS=5
 
     info "系统信息: ${SYS_OS}/${SYS_ARCH}"

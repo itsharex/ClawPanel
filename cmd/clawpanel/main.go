@@ -24,6 +24,7 @@ import (
 	"github.com/zhaoxinyi02/ClawPanel/internal/process"
 	"github.com/zhaoxinyi02/ClawPanel/internal/taskman"
 	"github.com/zhaoxinyi02/ClawPanel/internal/update"
+	"github.com/zhaoxinyi02/ClawPanel/internal/updater"
 	"github.com/zhaoxinyi02/ClawPanel/internal/websocket"
 )
 
@@ -109,7 +110,12 @@ func runServer(stopCh chan struct{}) {
 	pluginMgr := plugin.NewManager(cfg)
 
 	// 初始化面板自检更新器
-	panelUpdater := update.NewUpdater("v5.0.8", cfg.DataDir)
+	panelUpdater := update.NewUpdater("v5.0.9", cfg.DataDir)
+
+	// 启动独立更新服务（进程隔离，独立端口）
+	updaterSrv := updater.NewServer("v5.0.9", cfg.DataDir, cfg.Port)
+	updaterSrv.Start()
+	defer updaterSrv.Stop()
 
 	// 设置 Gin 模式
 	if cfg.Debug {
@@ -191,12 +197,16 @@ func runServer(stopCh chan struct{}) {
 			auth.GET("/system/update-status", handler.UpdateStatus(cfg))
 
 			// ClawPanel 面板自检更新
-			auth.GET("/panel/version", handler.GetPanelVersion("v5.0.8"))
+			auth.GET("/panel/version", handler.GetPanelVersion("v5.0.9"))
 			auth.GET("/panel/check-update", handler.CheckPanelUpdate(panelUpdater))
 			auth.POST("/panel/do-update", handler.DoPanelUpdate(panelUpdater))
 			auth.GET("/panel/update-progress", handler.PanelUpdateProgress(panelUpdater))
 			auth.GET("/panel/update-popup", handler.GetUpdatePopup(panelUpdater))
 			auth.POST("/panel/update-popup/shown", handler.MarkUpdatePopupShown(panelUpdater))
+
+			// 独立更新工具
+			auth.POST("/panel/update-token", handler.GenerateUpdateToken(cfg, cfg.Port))
+			auth.GET("/panel/update-history", handler.GetUpdateHistory(cfg))
 
 			// 事件日志
 			auth.GET("/events", handler.GetEvents(db))
@@ -349,7 +359,7 @@ func runServer(stopCh chan struct{}) {
 
 	// 启动服务器
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
-	log.Printf("[ClawPanel] v5.0.8 启动中 → http://%s", addr)
+	log.Printf("[ClawPanel] v5.0.9 启动中 → http://%s", addr)
 	log.Printf("[ClawPanel] 数据目录: %s", cfg.DataDir)
 	log.Printf("[ClawPanel] OpenClaw 目录: %s", cfg.OpenClawDir)
 
