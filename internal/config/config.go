@@ -194,6 +194,23 @@ func getDefaultOpenClawDir() string {
 			return c
 		}
 	}
+	
+	// If no openclaw.json found, check if npm global openclaw exists
+	// This handles the case where OpenClaw is installed via npm but not yet configured
+	npmGlobalDir := getNpmGlobalOpenClawDir()
+	if npmGlobalDir != "" {
+		// Return the first real user's .openclaw directory (or create path for it)
+		if runtime.GOOS == "windows" {
+			for _, userHome := range getWindowsUserHomes() {
+				userOpenClawDir := filepath.Join(userHome, ".openclaw")
+				// Return this path even if it doesn't exist yet - it will be created
+				return userOpenClawDir
+			}
+		}
+		// For non-Windows or if no user homes found, return home/.openclaw
+		return filepath.Join(home, ".openclaw")
+	}
+	
 	// Fallback: return the first candidate that exists as a directory
 	for _, c := range candidates {
 		if info, err := os.Stat(c); err == nil && info.IsDir() {
