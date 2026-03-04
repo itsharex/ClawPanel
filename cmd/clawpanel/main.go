@@ -363,8 +363,10 @@ func runServer(stopCh chan struct{}) {
 		api.POST("/events/log", handler.PostEvent(db))
 	}
 
-	// WebSocket 路由（前端连接 /ws?token=...）
-	r.GET("/ws", wsHub.HandleWebSocket())
+	// WebSocket 路由（前端连接 /ws?token=...，需通过 JWT 验证）
+	r.GET("/ws", wsHub.HandleWebSocket(func(token string) bool {
+		return middleware.ValidateToken(token, cfg.JWTSecret)
+	}))
 
 	// 内嵌前端静态资源
 	frontendDist, err := fs.Sub(frontendFS, "frontend/dist")

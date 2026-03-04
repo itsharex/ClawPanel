@@ -84,6 +84,14 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// 跨平台路径校验：如果配置中的路径是另一个 OS 的路径格式，则重新探测
+	// 例如：Windows 上读到了 /root/.openclaw（Linux 路径），或 Linux 上读到了 C:\... （Windows 路径）
+	if isStaleOSPath(cfg.OpenClawDir) {
+		cfg.OpenClawDir = getDefaultOpenClawDir()
+		cfg.OpenClawWork = ""
+		cfg.OpenClawApp = ""
+	}
+
 	// 设置默认工作目录（基于 OpenClawDir 的父目录）
 	parentDir := filepath.Dir(cfg.OpenClawDir) // e.g. /home/user/openclaw or C:\Users\xxx\.openclaw -> C:\Users\xxx
 	if cfg.OpenClawWork == "" || !dirExists(cfg.OpenClawWork) {
@@ -293,6 +301,23 @@ func (c *Config) WriteOpenClawJSON(data map[string]interface{}) error {
 		return err
 	}
 	return os.WriteFile(cfgPath, jsonData, 0644)
+}
+
+// isStaleOSPath 检测配置文件里的路径是否来自另一个 OS（跨平台路径污染）
+// 例如 Windows 上读到 /root/.openclaw（Unix 绝对路径），或 Linux 上读到 C:\Users\...
+func isStaleOSPath(p string) bool {
+	if p == "" {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		// Unix 绝对路径 /xxx 在 Windows 上无效
+		return strings.HasPrefix(p, "/")
+	}
+	// Unix 上：Windows 驱动器路径 C:\ 或 C:/ 无效
+	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		return true
+	}
+	return false
 }
 
 // dirExists 检查目录是否存在
