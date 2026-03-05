@@ -20,13 +20,23 @@ DEFAULT_VERSION="5.0.14"
 # ==================== 自动获取最新版本 ====================
 get_latest_version() {
     local ver=""
+    local tag=""
     if command -v curl &>/dev/null; then
-        ver=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | \
-              grep '"tag_name"' | head -1 | sed 's/.*"v\?\([^"]*\)".*/\1/')
+        tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | \
+              awk -F'"' '/"tag_name"/ {print $4; exit}')
     elif command -v wget &>/dev/null; then
-        ver=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | \
-              grep '"tag_name"' | head -1 | sed 's/.*"v\?\([^"]*\)".*/\1/')
+        tag=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | \
+              awk -F'"' '/"tag_name"/ {print $4; exit}')
     fi
+
+    # Normalize tag: v5.0.24 -> 5.0.24
+    ver="${tag#v}"
+
+    # Safety: only accept digits/dots/dashes in version
+    if [[ ! "$ver" =~ ^[0-9][0-9A-Za-z._-]*$ ]]; then
+        ver=""
+    fi
+
     echo "${ver:-$DEFAULT_VERSION}"
 }
 
