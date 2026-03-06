@@ -15,10 +15,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/zhaoxinyi02/ClawPanel/internal/config"
+	"github.com/zhaoxinyi02/ClawPanel/internal/eventlog"
 	"github.com/zhaoxinyi02/ClawPanel/internal/handler"
 	"github.com/zhaoxinyi02/ClawPanel/internal/middleware"
 	"github.com/zhaoxinyi02/ClawPanel/internal/model"
-	"github.com/zhaoxinyi02/ClawPanel/internal/eventlog"
 	"github.com/zhaoxinyi02/ClawPanel/internal/monitor"
 	"github.com/zhaoxinyi02/ClawPanel/internal/plugin"
 	"github.com/zhaoxinyi02/ClawPanel/internal/process"
@@ -41,10 +41,10 @@ func main() {
 	// 独立更新子进程模式：仅运行更新服务HTTP服务器
 	// 由主进程 fork 出来，主进程被 systemctl stop 杀死后子进程继续存活
 	if len(os.Args) >= 6 && os.Args[1] == "--updater-standalone" {
-		version := os.Args[2]      // e.g. "5.0.11"
-		dataDir := os.Args[3]      // e.g. "/home/xxx/ClawPanel/data"
-		panelPort := os.Args[4]    // e.g. "19527"
-		openClawDir := os.Args[5]  // e.g. "/home/xxx/openclaw/config"
+		version := os.Args[2]     // e.g. "5.0.11"
+		dataDir := os.Args[3]     // e.g. "/home/xxx/ClawPanel/data"
+		panelPort := os.Args[4]   // e.g. "19527"
+		openClawDir := os.Args[5] // e.g. "/home/xxx/openclaw/config"
 		port := 0
 		fmt.Sscanf(panelPort, "%d", &port)
 		if port == 0 {
@@ -117,27 +117,24 @@ func runServer(stopCh chan struct{}) {
 	sysLog := eventlog.NewSystemLogger(db, wsHub)
 	sysLog.Log("system", "panel.start", "ClawPanel 管理面板已启动")
 
-	// 检查 QQ 通道是否启用，读取 accessToken 用于 WS 认证
-	qqEnabled := false
-	qqAccessToken := ""
-	if ocCfg, _ := cfg.ReadOpenClawJSON(); ocCfg != nil {
-		if channels, ok := ocCfg["channels"].(map[string]interface{}); ok {
-			if qqCh, ok := channels["qq"].(map[string]interface{}); ok {
-				if enabled, ok := qqCh["enabled"].(bool); ok && enabled {
-					qqEnabled = true
-				}
-				if token, ok := qqCh["accessToken"].(string); ok {
-					qqAccessToken = token
-				}
-			}
+	readQQChannelState := func() (bool, string) {
+		enabled, token, err := cfg.ReadQQChannelState()
+		if err != nil {
+			return false, ""
 		}
+		return enabled, token
 	}
 
+	// 检查 QQ 通道是否启用，读取 accessToken 用于 WS 认证
+	qqEnabled, _ := readQQChannelState()
+
 	// 启动 OneBot11 事件监听器 (仅当 QQ 通道启用时)
-	// 传入 accessToken 用于 NapCat WS 认证（NapCat onebot11.json ws token 须与此一致）
 	var evListener *eventlog.Listener
 	if qqEnabled {
-		evListener = eventlog.NewListener(db, wsHub, "ws://127.0.0.1:3001", qqAccessToken)
+		evListener = eventlog.NewListener(db, wsHub, "ws://127.0.0.1:3001", func() string {
+			_, token := readQQChannelState()
+			return token
+		})
 		evListener.Start()
 		defer evListener.Stop()
 	}
@@ -195,6 +192,13 @@ func runServer(stopCh chan struct{}) {
 			// OpenClaw 配置
 			auth.GET("/openclaw/config", handler.GetOpenClawConfig(cfg))
 			auth.PUT("/openclaw/config", handler.SaveOpenClawConfig(cfg))
+			auth.GET("/openclaw/agents", handler.GetOpenClawAgents(cfg))
+			auth.POST("/openclaw/agents", handler.CreateOpenClawAgent(cfg))
+			auth.PUT("/openclaw/agents/:id", handler.UpdateOpenClawAgent(cfg))
+			auth.DELETE("/openclaw/agents/:id", handler.DeleteOpenClawAgent(cfg))
+			auth.GET("/openclaw/bindings", handler.GetOpenClawBindings(cfg))
+			auth.PUT("/openclaw/bindings", handler.SaveOpenClawBindings(cfg))
+			auth.POST("/openclaw/route/preview", handler.PreviewOpenClawRoute(cfg))
 			auth.GET("/openclaw/models", handler.GetModels(cfg))
 			auth.PUT("/openclaw/models", handler.SaveModels(cfg))
 			auth.GET("/openclaw/channels", handler.GetChannels(cfg))
