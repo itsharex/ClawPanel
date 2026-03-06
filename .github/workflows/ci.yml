@@ -55,6 +55,49 @@ jobs:
       - name: Run Go tests
         run: go test -count=1 -shuffle=on ./...
 
+  go-handler-tests:
+    name: Go Handler Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run handler unit tests with coverage
+        run: |
+          set -o pipefail
+          go test -count=1 -shuffle=on -coverprofile=handler.coverage.out ./internal/handler/... | tee handler-test.log
+
+      - name: Summarize handler coverage
+        run: |
+          go tool cover -func=handler.coverage.out | tee handler-coverage.txt
+          TOTAL="$(awk '/^total:/ { print $3 }' handler-coverage.txt)"
+          {
+            echo "### Go Handler Coverage"
+            echo ""
+            echo "- Package set: \`./internal/handler/...\`"
+            echo "- Total coverage: \`${TOTAL}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload handler test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-handler-tests
+          path: |
+            handler-test.log
+            handler.coverage.out
+            handler-coverage.txt
+          retention-days: 14
+          if-no-files-found: ignore
+
   go-race-coverage:
     name: Go Race + Coverage
     runs-on: ubuntu-latest
@@ -125,7 +168,7 @@ jobs:
 
   backend-build:
     name: Backend Build
-    needs: [go-vet, go-test, go-race-coverage, web-build]
+    needs: [go-vet, go-test, go-handler-tests, go-race-coverage, web-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
