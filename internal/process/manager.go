@@ -644,7 +644,29 @@ func (m *Manager) isNapCatRunning() bool {
 		out2, err2 := exec.Command("tasklist", "/FI", "IMAGENAME eq napcat.exe", "/NH").Output()
 		return err2 == nil && strings.Contains(string(out2), "napcat.exe")
 	}
-	// Linux: check Docker container state
-	out, err := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", "openclaw-qq").Output()
+	// Linux/macOS: check Docker container state with robust env/path handling
+	out, err := runDockerOutput("inspect", "--format", "{{.State.Running}}", "openclaw-qq")
 	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+func runDockerOutput(args ...string) ([]byte, error) {
+	bins := []string{"docker", "/usr/local/bin/docker", "/opt/homebrew/bin/docker"}
+	for _, bin := range bins {
+		cmd := exec.Command(bin, args...)
+		cmd.Env = buildProcessEnv()
+		if out, err := cmd.Output(); err == nil {
+			return out, nil
+		}
+		if runtime.GOOS == "darwin" {
+			for _, archFlag := range []string{"-arm64", "-x86_64"} {
+				altArgs := append([]string{archFlag, bin}, args...)
+				alt := exec.Command("arch", altArgs...)
+				alt.Env = buildProcessEnv()
+				if out, err := alt.Output(); err == nil {
+					return out, nil
+				}
+			}
+		}
+	}
+	return nil, fmt.Errorf("docker command unavailable")
 }
