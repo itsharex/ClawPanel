@@ -426,9 +426,26 @@ func (c *Config) OpenClawInstalled() bool {
 	if c.OpenClawConfigExists() {
 		return true
 	}
+	// 1.5 OpenClaw 应用目录存在（package.json）
+	if c.OpenClawApp != "" {
+		if _, err := os.Stat(filepath.Join(c.OpenClawApp, "package.json")); err == nil {
+			return true
+		}
+	}
 	// 2. 二进制在 PATH 中可用
 	if p, err := exec.LookPath("openclaw"); err == nil && p != "" {
 		return true
+	}
+	// 2.5 常见绝对路径兜底（服务环境 PATH 可能不完整）
+	commonBins := []string{
+		"/usr/local/bin/openclaw",
+		"/usr/bin/openclaw",
+		"/opt/homebrew/bin/openclaw",
+	}
+	for _, bin := range commonBins {
+		if _, err := os.Stat(bin); err == nil {
+			return true
+		}
 	}
 	// 3. Windows: 检查 npm 全局目录（包括普通用户和 SYSTEM 账户）
 	if runtime.GOOS == "windows" {
