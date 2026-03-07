@@ -277,7 +277,7 @@ export default function Channels() {
       return chConf.enabled || pluginConf.enabled;
     });
     if (firstEnabled) setSelectedChannel(firstEnabled.id);
-    else if (CHANNEL_DEFS.length > 0) setSelectedChannel(CHANNEL_DEFS[0].id);
+    else setSelectedChannel('feishu');
   }, [ocConfig, selectedChannel]);
   useEffect(() => {
     const timer = setInterval(loadNapcatStatus, 30000);
