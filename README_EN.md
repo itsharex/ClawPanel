@@ -47,6 +47,7 @@ Unified configuration for **20+ channels** with one-click enable/disable:
 ### Configuration Center
 - **Model Config**: Multi-provider management (OpenAI / Anthropic / Google / DeepSeek / Volcengine etc.)
 - **Agent Config**: System prompt, temperature, max tokens
+- **Browser Control Presets**: Visual switching between `browser.enabled=false` and `browser.enabled=true + browser.defaultProfile="openclaw"` to reduce accidental takeover of the system browser
 - **JSON Mode**: Direct editing of full configuration JSON
 - Auto-injects `compat.supportsDeveloperRole=false` for non-OpenAI providers
 
