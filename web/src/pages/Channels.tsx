@@ -180,7 +180,7 @@ export default function Channels() {
   };
 
   const [status, setStatus] = useState<any>(null);
-  const [selectedChannel, setSelectedChannel] = useState('qq');
+  const [selectedChannel, setSelectedChannel] = useState('');
   const [ocConfig, setOcConfig] = useState<any>({});
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
@@ -265,6 +265,20 @@ export default function Channels() {
   };
 
   useEffect(() => { reload(); loadSoftware(); loadNapcatStatus(); loadInstalledPlugins(); }, []);
+  // 自动选择第一个已启用的渠道（而非硬编码 QQ）
+  useEffect(() => {
+    if (selectedChannel) return; // 用户已手动选择
+    const firstEnabled = CHANNEL_DEFS.find(ch => {
+      const chConf = ocConfig?.channels?.[ch.id] || {};
+      const pluginConf = ocConfig?.plugins?.entries?.[ch.id] || {};
+      if (ch.id === 'feishu') {
+        return chConf.enabled || pluginConf.enabled || ocConfig?.plugins?.entries?.['feishu-openclaw-plugin']?.enabled;
+      }
+      return chConf.enabled || pluginConf.enabled;
+    });
+    if (firstEnabled) setSelectedChannel(firstEnabled.id);
+    else if (CHANNEL_DEFS.length > 0) setSelectedChannel(CHANNEL_DEFS[0].id);
+  }, [ocConfig, selectedChannel]);
   useEffect(() => {
     const timer = setInterval(loadNapcatStatus, 30000);
     return () => clearInterval(timer);
