@@ -136,6 +136,84 @@ func TestSaveOpenClawConfigRejectsInvalidNumericFields(t *testing.T) {
 	}
 }
 
+func TestSaveOpenClawConfigPreservesMissingHiddenFieldsWithoutOverwritingExplicitChanges(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+
+	initial := map[string]interface{}{
+		"tools": map[string]interface{}{
+			"profile": "minimal",
+			"agentToAgent": map[string]interface{}{
+				"enabled": true,
+			},
+		},
+		"session": map[string]interface{}{
+			"dmScope": "main",
+			"maintenance": map[string]interface{}{
+				"maxEntries": 50,
+			},
+		},
+		"models": map[string]interface{}{
+			"providers": map[string]interface{}{},
+		},
+	}
+	raw, _ := json.Marshal(initial)
+	if err := os.WriteFile(filepath.Join(dir, "openclaw.json"), raw, 0644); err != nil {
+		t.Fatalf("write openclaw.json: %v", err)
+	}
+
+	r := gin.New()
+	r.PUT("/openclaw/config", SaveOpenClawConfig(cfg))
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"config": map[string]interface{}{
+			"tools": map[string]interface{}{
+				"profile": "full",
+			},
+			"session": map[string]interface{}{
+				"dmScope": "per-account-channel-peer",
+			},
+			"models": map[string]interface{}{
+				"providers": map[string]interface{}{},
+			},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/openclaw/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	saved, err := cfg.ReadOpenClawJSON()
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+
+	tools, _ := saved["tools"].(map[string]interface{})
+	if got := strings.TrimSpace(toString(tools["profile"])); got != "full" {
+		t.Fatalf("expected tools.profile to keep explicit change, got %q", got)
+	}
+	agentToAgent, _ := tools["agentToAgent"].(map[string]interface{})
+	if enabled, ok := agentToAgent["enabled"].(bool); !ok || !enabled {
+		t.Fatalf("expected missing tools.agentToAgent.enabled to be preserved, got %#v", agentToAgent)
+	}
+
+	session, _ := saved["session"].(map[string]interface{})
+	if got := strings.TrimSpace(toString(session["dmScope"])); got != "per-account-channel-peer" {
+		t.Fatalf("expected session.dmScope to keep explicit change, got %q", got)
+	}
+	maintenance, _ := session["maintenance"].(map[string]interface{})
+	if got := toString(maintenance["maxEntries"]); got != "50" {
+		t.Fatalf("expected missing session.maintenance.maxEntries to be preserved, got %#v", maintenance)
+	}
+}
+
 func TestSaveOpenClawConfigRejectsInvalidDMScope(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)

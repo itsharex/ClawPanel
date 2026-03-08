@@ -49,15 +49,55 @@ func normalizeProviderAPIs(providers map[string]interface{}) {
 	}
 }
 
+func preserveMissingMapFields(dst, src map[string]interface{}) {
+	if dst == nil || src == nil {
+		return
+	}
+	for key, srcVal := range src {
+		dstVal, exists := dst[key]
+		if !exists {
+			dst[key] = srcVal
+			continue
+		}
+		srcMap, srcIsMap := srcVal.(map[string]interface{})
+		dstMap, dstIsMap := dstVal.(map[string]interface{})
+		if srcIsMap && dstIsMap {
+			preserveMissingMapFields(dstMap, srcMap)
+		}
+	}
+}
+
 func preserveHiddenOpenClawFields(dst, src map[string]interface{}) {
 	if dst == nil || src == nil {
 		return
 	}
-	if tools, ok := src["tools"]; ok {
-		dst["tools"] = tools
+	if srcTools, ok := src["tools"].(map[string]interface{}); ok {
+		dstTools, _ := dst["tools"].(map[string]interface{})
+		if dstTools == nil {
+			dstTools = map[string]interface{}{}
+		}
+		preserveMissingMapFields(dstTools, srcTools)
+		if len(dstTools) > 0 {
+			dst["tools"] = dstTools
+		}
+	} else if tools, ok := src["tools"]; ok {
+		if _, exists := dst["tools"]; !exists {
+			dst["tools"] = tools
+		}
 	}
-	if session, ok := src["session"]; ok {
-		dst["session"] = session
+	if srcSession, ok := src["session"].(map[string]interface{}); ok {
+		dstSession, _ := dst["session"].(map[string]interface{})
+		if dstSession == nil {
+			dstSession = map[string]interface{}{}
+		}
+		preserveMissingMapFields(dstSession, srcSession)
+		if len(dstSession) > 0 {
+			dst["session"] = dstSession
+		}
+	} else if session, ok := src["session"]; ok {
+		if _, exists := dst["session"]; !exists {
+			dst["session"] = session
+		}
 	}
 	if srcCron, ok := src["cron"].(map[string]interface{}); ok {
 		dstCron, _ := dst["cron"].(map[string]interface{})
@@ -65,7 +105,9 @@ func preserveHiddenOpenClawFields(dst, src map[string]interface{}) {
 			if dstCron == nil {
 				dstCron = map[string]interface{}{}
 			}
-			dstCron["jobs"] = jobs
+			if _, exists := dstCron["jobs"]; !exists {
+				dstCron["jobs"] = jobs
+			}
 			dst["cron"] = dstCron
 		}
 	}

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import {
   Save, RefreshCw, ChevronDown, ChevronRight,
@@ -172,6 +172,7 @@ const TOOL_GOVERNANCE_PRESETS: Record<ToolProfilePreset, { label: string; help: 
 export default function SystemConfig() {
   const { t: i18n } = useI18n();
   const { uiMode } = (useOutletContext() as { uiMode?: 'modern' }) || {};
+  const [searchParams] = useSearchParams();
   const modern = uiMode === 'modern';
   const [config, setConfig] = useState<any>({});
   const [loading, setLoading] = useState(true);
@@ -210,6 +211,12 @@ export default function SystemConfig() {
   const [showDiffPreview, setShowDiffPreview] = useState(false);
 
   useEffect(() => { loadConfig(); }, []);
+  useEffect(() => {
+    const nextTab = searchParams.get('tab');
+    if (nextTab && ['models', 'identity', 'general', 'version', 'env', 'health'].includes(nextTab)) {
+      setTab(nextTab as ConfigTab);
+    }
+  }, [searchParams]);
 
   const loadConfig = async () => {
     setLoading(true);
@@ -1896,11 +1903,46 @@ function SessionIsolationSection({
   const rawDmScope = typeof readConfigValue(config, 'session.dmScope') === 'string'
     ? String(readConfigValue(config, 'session.dmScope')).trim()
     : '';
-  const scopeCards: Array<{ id: string; label: string; help: string }> = [
-    { id: 'main', label: 'main', help: '所有私聊尽量复用主会话，隔离最弱。' },
-    { id: 'per-peer', label: 'per-peer', help: '按私聊对端拆分，适合单账号单渠道。' },
-    { id: 'per-channel-peer', label: 'per-channel-peer', help: '按渠道 + 私聊对端拆分，适合多渠道并行。' },
-    { id: 'per-account-channel-peer', label: 'per-account-channel-peer', help: '按账号 + 渠道 + 私聊对端拆分，适合飞书多账号。' },
+  const effectiveDmScope = rawDmScope || 'main';
+  const activeCardId = rawDmScope || 'default';
+  const scopeCards: Array<{ id: string; value: string; label: string; help: string; preview: string; badge?: string }> = [
+    {
+      id: 'default',
+      value: '',
+      label: '默认',
+      help: '不写入 session.dmScope，保留当前全局默认行为；运行时仍等价于 main。',
+      preview: '不写入 session.dmScope',
+      badge: '未显式配置',
+    },
+    {
+      id: 'main',
+      value: 'main',
+      label: 'main',
+      help: '所有私聊尽量复用主会话，隔离最弱，最容易出现上下文串扰。',
+      preview: 'session.dmScope = "main"',
+    },
+    {
+      id: 'per-peer',
+      value: 'per-peer',
+      label: 'per-peer',
+      help: '按私聊对端拆分，适合单账号、单渠道的简单场景。',
+      preview: 'session.dmScope = "per-peer"',
+    },
+    {
+      id: 'per-channel-peer',
+      value: 'per-channel-peer',
+      label: 'per-channel-peer',
+      help: '按渠道 + 私聊对端拆分，适合多渠道并行时避免跨渠道串上下文。',
+      preview: 'session.dmScope = "per-channel-peer"',
+    },
+    {
+      id: 'per-account-channel-peer',
+      value: 'per-account-channel-peer',
+      label: 'per-account-channel-peer',
+      help: '按账号 + 渠道 + 私聊对端拆分，适合飞书多账号或依赖 accountId 路由。',
+      preview: 'session.dmScope = "per-account-channel-peer"',
+      badge: '飞书推荐',
+    },
   ];
 
   const setDmScope = (next: string) => {
@@ -1914,9 +1956,41 @@ function SessionIsolationSection({
     updateConfig((draft: any) => {
       if (draft.session && typeof draft.session === 'object' && !Array.isArray(draft.session)) {
         delete draft.session.dmScope;
+        if (Object.keys(draft.session).length === 0) delete draft.session;
       }
     });
   };
+
+  const applyCard = (cardId: string) => {
+    const card = scopeCards.find(item => item.id === cardId);
+    if (!card) return;
+    if (!card.value) {
+      clearDmScope();
+      return;
+    }
+    setDmScope(card.value);
+  };
+
+  const statusTone =
+    !rawDmScope
+      ? 'border-gray-200 bg-gray-50/70 text-gray-700 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-200'
+      : rawDmScope === 'main'
+        ? 'border-amber-200 bg-amber-50/70 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200'
+        : rawDmScope === 'per-account-channel-peer'
+          ? 'border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200'
+          : 'border-sky-200 bg-sky-50/70 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200';
+
+  const statusTitle = rawDmScope
+    ? `当前已显式配置 session.dmScope = ${rawDmScope}`
+    : '当前使用默认行为（未显式写入 session.dmScope）';
+
+  const statusDescription = rawDmScope
+    ? rawDmScope === 'per-account-channel-peer'
+      ? '它已经作为全局私聊分桶规则生效，群聊 / 私聊准入策略不会替代它。当前配置也正好是飞书多账号与 accountId 路由场景的推荐值。'
+      : rawDmScope === 'main'
+        ? '它已经作为全局私聊分桶规则生效，群聊 / 私聊准入策略不会替代它。当前等价于让所有私聊尽量复用主会话，隔离最弱。'
+        : '它已经作为全局私聊分桶规则生效，群聊 / 私聊准入策略不会替代它。若你在飞书中启用了多账号或依赖 accountId 路由，可继续收紧到 per-account-channel-peer。'
+    : 'session.dmScope 是全局私聊隔离开关。当前配置文件未显式写入该字段，OpenClaw 运行时等价于 main；如果你在飞书中启用了多账号或依赖 accountId 路由，建议显式选择 per-account-channel-peer。';
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden transition-all hover:shadow-md">
@@ -1941,71 +2015,80 @@ function SessionIsolationSection({
 
       {expanded && (
         <div className="px-5 pb-6 pt-2 border-t border-gray-50 dark:border-gray-800/50 space-y-5 animate-in slide-in-from-top-2 duration-200">
-          <div className="rounded-xl border border-gray-200 bg-gray-50/80 dark:border-gray-700 dark:bg-gray-900/30 p-4 text-[12px] text-gray-700 dark:text-gray-200 space-y-2">
-            <div className="font-semibold">作用范围</div>
-            <div><span className="font-mono">session.dmScope</span> 决定私聊会话是否按用户、渠道、账号继续拆分；群聊 / 私聊准入策略不会替代它。</div>
-            <div>如果你在飞书中启用了多账号或依赖 <span className="font-mono">accountId</span> 路由，建议显式设置为 <span className="font-mono">per-account-channel-peer</span>。</div>
+          <div className={`rounded-xl border p-4 ${statusTone}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              {!rawDmScope ? <RotateCcw size={16} /> : rawDmScope === 'main' ? <AlertTriangle size={16} /> : <CheckCircle size={16} />}
+              <span className="text-xs font-semibold">{statusTitle}</span>
+              <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-current/15 bg-white/60 dark:bg-black/10 px-2 py-0.5 text-[10px] font-semibold">
+                全局生效
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-current/15 bg-white/60 dark:bg-black/10 px-2 py-0.5 text-[10px] font-semibold">
+                当前等效：{effectiveDmScope}
+              </span>
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed opacity-90">{statusDescription}</p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
             {scopeCards.map(card => {
-              const active = rawDmScope === card.id;
-              const recommended = card.id === 'per-account-channel-peer';
+              const active = activeCardId === card.id;
               return (
                 <button
                   key={card.id}
                   type="button"
-                  onClick={() => setDmScope(card.id)}
-                  className={`text-left rounded-xl border px-4 py-4 transition-colors ${
+                  onClick={() => applyCard(card.id)}
+                  className={`text-left rounded-xl border p-4 transition-all ${
                     active
-                      ? 'border-sky-400 bg-sky-50 dark:border-sky-700 dark:bg-sky-900/20'
-                      : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-sky-300 dark:hover:border-sky-700'
+                      ? 'border-sky-300 bg-sky-50/80 dark:border-sky-700 dark:bg-sky-950/25 shadow-sm'
+                      : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-sky-200 hover:bg-gray-50 dark:hover:bg-gray-900/40'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-semibold text-gray-900 dark:text-white">{card.label}</span>
-                    {recommended && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300">
-                        推荐
-                      </span>
-                    )}
+                    <div>
+                      <span className="text-sm font-semibold text-gray-900 dark:text-white block">{card.label}</span>
+                      {card.badge && (
+                        <span className={`mt-2 inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full ${
+                          card.id === 'per-account-channel-peer'
+                            ? 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300'
+                            : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'
+                        }`}>
+                          {card.badge}
+                        </span>
+                      )}
+                    </div>
+                    <span className={`w-5 h-5 rounded-full border flex items-center justify-center ${
+                      active
+                        ? 'border-sky-500 bg-sky-500 text-white'
+                        : 'border-gray-300 dark:border-gray-600 text-transparent'
+                    }`}>
+                      <CheckCircle size={12} />
+                    </span>
                   </div>
-                  <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{card.help}</p>
+                  <p className="mt-3 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{card.help}</p>
+                  <div className="mt-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/90 dark:bg-gray-950/40 px-3 py-2 text-[11px] font-mono text-gray-600 dark:text-gray-300 break-all">
+                    {card.preview}
+                  </div>
+                  {active && (
+                    <div className="mt-3 inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 dark:text-sky-300">
+                      <CheckCircle size={11} />
+                      当前选择
+                    </div>
+                  )}
                 </button>
               );
             })}
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,260px),1fr] gap-4 items-start">
+          <div className="rounded-xl border border-sky-100 bg-sky-50/80 dark:border-sky-900/40 dark:bg-sky-950/20 px-4 py-3 text-[12px] text-sky-800 dark:text-sky-200 space-y-1.5">
+            <div className="font-medium">选择建议</div>
             <div>
-              <label className="text-xs text-gray-500">session.dmScope</label>
-              <select
-                value={rawDmScope}
-                onChange={e => {
-                  if (!e.target.value) {
-                    clearDmScope();
-                    return;
-                  }
-                  setDmScope(e.target.value);
-                }}
-                className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
-              >
-                <option value="">未配置（运行时等价 main）</option>
-                {scopeCards.map(card => (
-                  <option key={card.id} value={card.id}>{card.label}</option>
-                ))}
-              </select>
+              单账号场景通常从 <span className="font-mono">per-peer</span> 或 <span className="font-mono">per-channel-peer</span> 起步；
+              飞书启用多账号、默认账号映射，或 Agent 路由依赖 <span className="font-mono">accountId</span> 时，优先使用
+              {' '}
+              <span className="font-mono">per-account-channel-peer</span>。
             </div>
-            <div className="rounded-xl border border-sky-100 bg-sky-50/80 dark:border-sky-900/40 dark:bg-sky-950/20 px-4 py-3 text-[12px] text-sky-800 dark:text-sky-200 space-y-1.5">
-              <div className="font-medium">飞书多账号推荐</div>
-              <div>当 <span className="font-mono">channels.feishu.accounts/defaultAccount</span> 与 Agent 路由里的 <span className="font-mono">accountId</span> 一起使用时，优先选择 <span className="font-mono">per-account-channel-peer</span>。</div>
-              <button
-                type="button"
-                onClick={clearDmScope}
-                className="mt-1 inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-md border border-sky-200 dark:border-sky-800 hover:bg-white/70 dark:hover:bg-black/10"
-              >
-                恢复为未配置
-              </button>
+            <div>
+              只有在你明确希望所有私聊尽量共享主会话时，才建议显式写成 <span className="font-mono">main</span>。
             </div>
           </div>
         </div>
@@ -2068,6 +2151,8 @@ function ToolGovernanceSection({
     });
   };
 
+  const clearToolProfile = () => setToolProfile('');
+
   const applyHeadlessPreset = () => {
     mutateTools((toolsDraft) => {
       toolsDraft.profile = 'minimal';
@@ -2075,6 +2160,20 @@ function ToolGovernanceSection({
       toolsDraft.deny = ['group:runtime', 'group:ui', 'group:nodes', 'group:automation'];
     });
   };
+
+  const currentProfileMeta = (rawProfile && rawProfile in TOOL_GOVERNANCE_PRESETS)
+    ? TOOL_GOVERNANCE_PRESETS[rawProfile as ToolProfilePreset]
+    : null;
+  const allowCount = parseConfigListInput(allowDraft).length;
+  const denyCount = parseConfigListInput(denyDraft).length;
+  const statusTone =
+    !rawProfile
+      ? 'border-gray-200 bg-gray-50/70 text-gray-700 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-200'
+      : rawProfile === 'minimal'
+        ? 'border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200'
+        : rawProfile === 'full'
+          ? 'border-amber-200 bg-amber-50/70 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200'
+          : 'border-violet-200 bg-violet-50/70 text-violet-800 dark:border-violet-900/60 dark:bg-violet-950/30 dark:text-violet-200';
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden transition-all hover:shadow-md">
@@ -2099,10 +2198,24 @@ function ToolGovernanceSection({
 
       {expanded && (
         <div className="px-5 pb-6 pt-2 border-t border-gray-50 dark:border-gray-800/50 space-y-5 animate-in slide-in-from-top-2 duration-200">
-          <div className="rounded-xl border border-violet-100 bg-violet-50/80 dark:border-violet-900/40 dark:bg-violet-950/20 p-4 text-[12px] text-violet-800 dark:text-violet-200 space-y-2">
-            <div className="font-semibold">治理边界</div>
-            <div><span className="font-mono">deny</span> 的优先级高于 <span className="font-mono">allow</span>；被拒绝的工具不会再暴露给模型。</div>
-            <div>浏览器、原生命令、重启和插件启停仍分别在本页其他区域或插件页管理；这里专门负责“模型能看到哪些工具”。</div>
+          <div className={`rounded-xl border p-4 ${statusTone}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              {!rawProfile ? <RotateCcw size={16} /> : rawProfile === 'full' ? <AlertTriangle size={16} /> : <CheckCircle size={16} />}
+              <span className="text-xs font-semibold">
+                {rawProfile ? `当前 profile = ${currentProfileMeta?.label || rawProfile}` : '当前未显式设置 tools.profile'}
+              </span>
+              <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-current/15 bg-white/60 dark:bg-black/10 px-2 py-0.5 text-[10px] font-semibold">
+                allow {allowCount} 条
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-current/15 bg-white/60 dark:bg-black/10 px-2 py-0.5 text-[10px] font-semibold">
+                deny {denyCount} 条
+              </span>
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed opacity-90">
+              {rawProfile
+                ? `${currentProfileMeta?.help || '当前配置使用自定义工具预设。'} deny 的优先级始终高于 allow；被拒绝的工具不会再暴露给模型。`
+                : 'tools.profile / tools.allow / tools.deny 共同决定模型能看到哪些工具。浏览器、原生命令、重启和插件启停仍分别在本页其他区域或插件页管理；这里专门负责“模型能看到哪些工具”。'}
+            </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -2113,52 +2226,85 @@ function ToolGovernanceSection({
                   key={presetId}
                   type="button"
                   onClick={() => setToolProfile(presetId)}
-                  className={`text-left rounded-xl border px-4 py-4 transition-colors ${
+                  className={`text-left rounded-xl border p-4 transition-all ${
                     active
-                      ? 'border-violet-400 bg-violet-50 dark:border-violet-700 dark:bg-violet-900/20'
-                      : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-violet-300 dark:hover:border-violet-700'
+                      ? 'border-violet-300 bg-violet-50/80 dark:border-violet-700 dark:bg-violet-950/25 shadow-sm'
+                      : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-violet-200 hover:bg-gray-50 dark:hover:bg-gray-900/40'
                   }`}
                 >
-                  <div className="text-sm font-semibold text-gray-900 dark:text-white">{meta.label}</div>
-                  <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{meta.help}</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-semibold text-gray-900 dark:text-white">{meta.label}</div>
+                    <span className={`w-5 h-5 rounded-full border flex items-center justify-center ${
+                      active
+                        ? 'border-violet-500 bg-violet-500 text-white'
+                        : 'border-gray-300 dark:border-gray-600 text-transparent'
+                    }`}>
+                      <CheckCircle size={12} />
+                    </span>
+                  </div>
+                  <p className="mt-3 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{meta.help}</p>
+                  {active && (
+                    <div className="mt-3 inline-flex items-center gap-1 text-[10px] font-semibold text-violet-700 dark:text-violet-300">
+                      <CheckCircle size={11} />
+                      当前选择
+                    </div>
+                  )}
                 </button>
               );
             })}
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,260px),1fr] gap-4">
-            <div className="space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,320px),1fr] gap-4">
+            <div className="rounded-[22px] border border-violet-100/80 dark:border-violet-900/40 bg-[linear-gradient(145deg,rgba(255,255,255,0.84),rgba(245,243,255,0.72))] dark:bg-[linear-gradient(145deg,rgba(24,16,42,0.82),rgba(76,29,149,0.16))] p-4 space-y-4">
               <div>
-                <label className="text-xs text-gray-500">tools.profile</label>
-                <select
-                  value={rawProfile}
-                  onChange={e => setToolProfile(e.target.value)}
-                  className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
-                >
-                  <option value="">未配置</option>
-                  {Object.entries(TOOL_GOVERNANCE_PRESETS).map(([presetId, meta]) => (
-                    <option key={presetId} value={presetId}>{meta.label}</option>
-                  ))}
-                </select>
+                <div className="text-sm font-semibold text-gray-900 dark:text-white">快捷操作</div>
+                <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                  如果你想把 OpenClaw 收敛到“传统无头”范围，可以直接套用建议预设；如果更想完全手控 allow / deny，则把 profile 恢复为未配置即可。
+                </p>
               </div>
-              <button
-                type="button"
-                onClick={applyHeadlessPreset}
-                className="w-full px-3 py-2.5 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700"
-              >
-                一键套用“传统无头”建议
-              </button>
-              <p className="text-[11px] text-gray-400 leading-relaxed">
-                这会把 profile 设为 <span className="font-mono">minimal</span>，只补回 <span className="font-mono">group:web / group:fs</span>，并显式拒绝 runtime、UI、nodes、automation 四大扩展面。
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={applyHeadlessPreset}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700"
+                >
+                  <Shield size={12} />
+                  一键套用“传统无头”建议
+                </button>
+                <button
+                  type="button"
+                  onClick={clearToolProfile}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-violet-200 text-violet-700 hover:bg-white dark:border-violet-800 dark:text-violet-300 dark:hover:bg-violet-950/30"
+                >
+                  <RotateCcw size={12} />
+                  恢复为未配置
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-white/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 px-3 py-2.5">
+                  <div className="text-[11px] text-gray-500">当前 profile</div>
+                  <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">{currentProfileMeta?.label || '未配置'}</div>
+                </div>
+                <div className="rounded-xl border border-white/80 dark:border-slate-800 bg-white/80 dark:bg-slate-900/50 px-3 py-2.5">
+                  <div className="text-[11px] text-gray-500">治理优先级</div>
+                  <div className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">deny &gt; allow</div>
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">
+                建议预设会把 profile 设为 <span className="font-mono">minimal</span>，只补回 <span className="font-mono">group:web / group:fs</span>，
+                并显式拒绝 <span className="font-mono">runtime / ui / nodes / automation</span> 四大扩展面。
               </p>
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <div>
+              <div className="rounded-xl border border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-900/30 p-4">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs text-gray-500">tools.allow</label>
-                  <span className="text-[10px] text-gray-400">支持逗号、中文逗号或换行分隔</span>
+                  <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">tools.allow</label>
+                  <span className="text-[10px] text-gray-400">{allowCount} 条</span>
                 </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                  支持逗号、中文逗号或换行分隔。这里写“额外放行”的工具组，适合在 profile 之外做少量补充。
+                </p>
                 <textarea
                   rows={4}
                   value={allowDraft}
@@ -2168,14 +2314,17 @@ function ToolGovernanceSection({
                     setToolList('allow', e.target.value);
                   }}
                   placeholder="例如: group:web, group:fs"
-                  className="w-full mt-1 px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                  className="w-full mt-3 px-3 py-2.5 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
                 />
               </div>
-              <div>
+              <div className="rounded-xl border border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-900/30 p-4">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs text-gray-500">tools.deny</label>
-                  <span className="text-[10px] text-gray-400">deny 优先于 allow</span>
+                  <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">tools.deny</label>
+                  <span className="text-[10px] text-gray-400">{denyCount} 条</span>
                 </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                  deny 的优先级始终高于 allow。这里适合写你明确不想暴露给模型的工具面。
+                </p>
                 <textarea
                   rows={4}
                   value={denyDraft}
@@ -2185,7 +2334,7 @@ function ToolGovernanceSection({
                     setToolList('deny', e.target.value);
                   }}
                   placeholder="例如: group:runtime, group:ui, group:nodes, group:automation"
-                  className="w-full mt-1 px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                  className="w-full mt-3 px-3 py-2.5 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
                 />
               </div>
             </div>

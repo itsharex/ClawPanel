@@ -149,13 +149,6 @@ const FEISHU_FIELD_SECTIONS: Record<Exclude<ChannelFieldSection, 'default'>, { t
   },
 };
 
-const FEISHU_DM_SCOPE_OPTIONS = [
-  { id: 'main', label: 'main', help: '所有私聊复用主会话，最容易串上下文。' },
-  { id: 'per-peer', label: 'per-peer', help: '按私聊对端拆分，适合单账号场景。' },
-  { id: 'per-channel-peer', label: 'per-channel-peer', help: '按渠道 + 私聊对端拆分，适合多渠道并行。' },
-  { id: 'per-account-channel-peer', label: 'per-account-channel-peer', help: '按账号 + 渠道 + 私聊对端拆分，适合飞书多账号。' },
-] as const;
-
 const CHANNEL_DEFS: ChannelDef[] = [
   { id: 'qq', label: 'QQ (NapCat)', description: 'QQ个人号，NapCat OneBot11协议', type: 'plugin',
     loginMethods: ['qrcode', 'quick', 'password'],
@@ -406,9 +399,7 @@ export default function Channels() {
   const [feishuActiveAccountId, setFeishuActiveAccountId] = useState('default');
   const [feishuNewAccountId, setFeishuNewAccountId] = useState('');
   const [feishuDmDiagnosis, setFeishuDmDiagnosis] = useState<FeishuDMDiagnosis | null>(null);
-  const [feishuDmScopeDraft, setFeishuDmScopeDraft] = useState('');
   const [loadingFeishuDmDiagnosis, setLoadingFeishuDmDiagnosis] = useState(false);
-  const [savingFeishuDmScope, setSavingFeishuDmScope] = useState(false);
   const qrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const feishuAccountModeInitializedRef = useRef(false);
   const navigate = useNavigate();
@@ -503,7 +494,6 @@ export default function Channels() {
       if (!r.ok) return;
       const diagnosis = r.diagnosis as FeishuDMDiagnosis;
       setFeishuDmDiagnosis(diagnosis);
-      setFeishuDmScopeDraft(String(diagnosis?.configuredDmScope || '').trim());
     } catch {
       // noop
     } finally {
@@ -626,7 +616,6 @@ export default function Channels() {
   const hasFeishuGroupAllowlistConflict = currentFeishuGroupPolicy !== 'allowlist' && !!currentFeishuGroupAllowFrom;
   const currentConfiguredFeishuDmScope = String(feishuDmDiagnosis?.configuredDmScope || '').trim();
   const currentEffectiveFeishuDmScope = String(feishuDmDiagnosis?.effectiveDmScope || 'main').trim() || 'main';
-  const hasPendingFeishuDmScopeChange = feishuDmScopeDraft !== currentConfiguredFeishuDmScope;
 
   const handleToggleFeishuAdvancedAccounts = (enabled: boolean) => {
     setFeishuAdvancedAccounts(enabled);
@@ -868,35 +857,6 @@ export default function Channels() {
     updateChannelDraft(channelId, draft => {
       setNestedValue(draft, key, !getNestedValue(draft, key));
     });
-  };
-
-  const handleSaveFeishuDmScope = async () => {
-    setSavingFeishuDmScope(true);
-    setMsg('');
-    try {
-      const nextConfig = deepClone(ocConfig || {});
-      const nextScope = feishuDmScopeDraft.trim();
-      if (isPlainObject(nextConfig.channels?.feishu)) {
-        delete nextConfig.channels.feishu.dmScope;
-      }
-      if (nextScope) {
-        if (!isPlainObject(nextConfig.session)) nextConfig.session = {};
-        nextConfig.session.dmScope = nextScope;
-      } else if (isPlainObject(nextConfig.session)) {
-        delete nextConfig.session.dmScope;
-        if (Object.keys(nextConfig.session).length === 0) delete nextConfig.session;
-      }
-      const r = await api.updateOpenClawConfig(nextConfig);
-      if (!r.ok) throw new Error(r.error || '保存失败');
-      setOcConfig(nextConfig);
-      setMsg('私聊上下文隔离已保存');
-      await loadFeishuDmDiagnosis();
-      setTimeout(() => setMsg(''), 3000);
-    } catch (err) {
-      setMsg('保存私聊上下文隔离失败: ' + String(err));
-    } finally {
-      setSavingFeishuDmScope(false);
-    }
   };
 
   // 飞书版本切换
@@ -1912,48 +1872,27 @@ export default function Channels() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-4 items-end">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1.5">session.dmScope</label>
-                      <select
-                        value={feishuDmScopeDraft}
-                        onChange={e => setFeishuDmScopeDraft(e.target.value)}
-                        className="w-full px-3.5 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
-                      >
-                        <option value="">未配置（运行时等价 main）</option>
-                        {FEISHU_DM_SCOPE_OPTIONS.map(option => (
-                          <option key={option.id} value={option.id}>{option.label}</option>
-                        ))}
-                      </select>
-                      <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
-                        飞书多账号通常推荐 <span className="font-mono">{feishuDmDiagnosis?.recommendedDmScope || 'per-account-channel-peer'}</span>；
-                        单账号可选 <span className="font-mono">per-peer</span> 或 <span className="font-mono">per-channel-peer</span>。
-                      </p>
+                  <div className="rounded-xl border border-sky-100 dark:border-sky-900/40 bg-white/75 dark:bg-slate-900/40 px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="text-[12px] leading-relaxed text-sky-900 dark:text-sky-100">
+                      <div className="font-semibold">配置入口已收敛到系统设置</div>
+                      <div className="mt-1 text-sky-800/90 dark:text-sky-100/85">
+                        <span className="font-mono">session.dmScope</span> 是全局配置。这里保留飞书账号与运行中会话的诊断视图，
+                        真正的编辑入口请前往 <span className="font-medium">系统配置 &gt; 通用配置 &gt; 私聊上下文隔离</span>。
+                      </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setFeishuDmScopeDraft(feishuDmDiagnosis?.recommendedDmScope || 'per-account-channel-peer')}
-                        className="px-3 py-2 text-xs font-medium rounded-lg border border-sky-200 text-sky-700 hover:bg-white dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-950/30"
-                      >
-                        应用推荐值
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleSaveFeishuDmScope}
-                        disabled={savingFeishuDmScope || !hasPendingFeishuDmScopeChange}
-                        className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50"
-                      >
-                        {savingFeishuDmScope ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-                        保存隔离设置
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/config?tab=general')}
+                      className={`${modern ? 'page-modern-accent px-4 py-2 text-xs font-medium' : 'inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-sky-600 text-white hover:bg-sky-700 transition-colors shadow-sm'}`}
+                    >
+                      前往系统设置
+                    </button>
                   </div>
 
                   {feishuDmDiagnosis?.unsupportedChannelDmScope && (
                     <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50/80 dark:bg-amber-900/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
                       检测到 <span className="font-mono">channels.feishu.dmScope = {feishuDmDiagnosis.unsupportedChannelDmScope}</span>。
-                      该字段不是当前 OpenClaw 的有效 schema，请改用上面的 <span className="font-mono">session.dmScope</span>。
+                      该字段不是当前 OpenClaw 的有效 schema，请改用系统设置中的 <span className="font-mono">session.dmScope</span>。
                     </div>
                   )}
 
