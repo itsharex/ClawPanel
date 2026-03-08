@@ -8,6 +8,8 @@ interface AgentItem {
   workspace?: string;
   agentDir?: string;
   model?: any;
+  contextTokens?: number;
+  compaction?: any;
   tools?: any;
   sandbox?: any;
   groupChat?: any;
@@ -35,9 +37,13 @@ interface AgentFormState {
   paramTemperature: string;
   paramTopP: string;
   paramMaxTokens: string;
+  contextTokens: string;
+  compactionMode: '' | 'default' | 'safeguard';
+  compactionMaxHistoryShare: string;
   identityName: string;
-  identityDescription: string;
-  identityTone: string;
+  identityTheme: string;
+  identityEmoji: string;
+  identityAvatar: string;
   sandboxMode: '' | 'off' | 'non-main' | 'all';
   sandboxScope: '' | 'session' | 'agent' | 'shared';
   sandboxWorkspaceAccess: '' | 'none' | 'ro' | 'rw';
@@ -47,6 +53,9 @@ interface AgentFormState {
   sandboxDockerSetupCommand: string;
   sandboxDockerBinds: string;
   groupChatMode: InheritToggle;
+  toolProfile: '' | 'minimal' | 'coding' | 'messaging' | 'full';
+  toolAllow: string;
+  toolDeny: string;
   agentToAgentMode: InheritToggle;
   agentToAgentAllow: string;
   sessionVisibility: '' | 'same-agent' | 'all-agents';
@@ -64,11 +73,18 @@ interface AgentFormState {
 interface AgentStructuredTouchedState {
   model: boolean;
   params: boolean;
+  context: boolean;
   identity: boolean;
   sandbox: boolean;
   groupChat: boolean;
   tools: boolean;
   subagents: boolean;
+}
+
+interface AgentDefaultsState {
+  contextTokens?: number;
+  compactionMode: '' | 'default' | 'safeguard';
+  compactionMaxHistoryShare?: number;
 }
 
 interface BindingDraft {
@@ -104,6 +120,7 @@ interface AgentModelResponse {
 type AgentsWorkbenchView = 'directory' | 'routing';
 type AgentDetailTab = 'overview' | 'model' | 'tools' | 'files' | 'capabilities' | 'context' | 'advanced';
 type PreviewMetaKey = 'channel' | 'sender' | 'peer' | 'parentPeer' | 'guildId' | 'teamId' | 'accountId' | 'roles';
+type NumberInputConstraint = { integer?: boolean; min?: number; max?: number };
 
 interface AgentCoreFileEntry {
   name: string;
@@ -169,9 +186,13 @@ const DEFAULT_AGENT_FORM: AgentFormState = {
   paramTemperature: '',
   paramTopP: '',
   paramMaxTokens: '',
+  contextTokens: '',
+  compactionMode: '',
+  compactionMaxHistoryShare: '',
   identityName: '',
-  identityDescription: '',
-  identityTone: '',
+  identityTheme: '',
+  identityEmoji: '',
+  identityAvatar: '',
   sandboxMode: '',
   sandboxScope: '',
   sandboxWorkspaceAccess: '',
@@ -181,6 +202,9 @@ const DEFAULT_AGENT_FORM: AgentFormState = {
   sandboxDockerSetupCommand: '',
   sandboxDockerBinds: '',
   groupChatMode: 'inherit',
+  toolProfile: '',
+  toolAllow: '',
+  toolDeny: '',
   agentToAgentMode: 'inherit',
   agentToAgentAllow: '',
   sessionVisibility: '',
@@ -198,11 +222,16 @@ const DEFAULT_AGENT_FORM: AgentFormState = {
 const DEFAULT_AGENT_STRUCTURED_TOUCHED: AgentStructuredTouchedState = {
   model: false,
   params: false,
+  context: false,
   identity: false,
   sandbox: false,
   groupChat: false,
   tools: false,
   subagents: false,
+};
+
+const EMPTY_AGENT_DEFAULTS: AgentDefaultsState = {
+  compactionMode: '',
 };
 
 const AGENT_DIRECTORY_TABS: { id: AgentDetailTab; title: string; description: string }[] = [
@@ -213,6 +242,14 @@ const AGENT_DIRECTORY_TABS: { id: AgentDetailTab; title: string; description: st
   { id: 'capabilities', title: '技能与上下文 (Skills · Channels · Cron)', description: '补齐官方单 Agent 面板的运行态快照' },
   { id: 'context', title: '路由上下文 (Routing Context)', description: '查看它被哪些规则和会话引用' },
   { id: 'advanced', title: '高级 JSON (Advanced)', description: '需要完整 JSON 时再进入' },
+];
+
+const TOOL_POLICY_PRESETS: Array<{ id: '' | 'minimal' | 'coding' | 'messaging' | 'full'; label: string; help: string }> = [
+  { id: '', label: 'Inherit', help: '不写 per-agent profile，继续继承全局工具策略。' },
+  { id: 'minimal', label: 'Minimal', help: '只保留最小会话能力，适合作为最保守的起点。' },
+  { id: 'coding', label: 'Coding', help: '偏向编码/文件/运行时工具，适合代码型 Agent。' },
+  { id: 'messaging', label: 'Messaging', help: '偏向消息入口与渠道协作，适合路由型 Agent。' },
+  { id: 'full', label: 'Full', help: '完整工具面；除非明确需要，否则不建议长期给高权限 Agent。' },
 ];
 
 const AGENT_CORE_FILE_META: Record<string, { label: string; description: string }> = {
@@ -255,8 +292,8 @@ const PREVIEW_FIELD_META: Record<PreviewMetaKey, { label: string; placeholder: s
   },
   accountId: {
     label: '账号',
-    placeholder: '留空=默认账号，*=全部账号',
-    help: '想验证默认账号规则时可以留空；需要测试兜底规则时再写 *。',
+    placeholder: '留空=按默认账号预览，*=全部账号',
+    help: '留空时，面板会在已知 channel 下自动代入 defaultAccount；需要测试兜底规则时再写 *。',
   },
   sender: {
     label: '发送者',
@@ -780,6 +817,28 @@ function parseChannelsMeta(raw: any): Record<string, ChannelMeta> {
   return out;
 }
 
+function buildPreviewMetaPayload(previewMeta: Record<PreviewMetaKey, string>, channelMeta: Record<string, ChannelMeta>): Record<string, any> {
+  const meta: Record<string, any> = {};
+  for (const [key, raw] of Object.entries(previewMeta) as Array<[PreviewMetaKey, string]>) {
+    const text = raw.trim();
+    if (!text) continue;
+    if (key === 'roles') {
+      const roles = parseCSV(text);
+      if (roles.length > 0) meta[key] = roles;
+      continue;
+    }
+    meta[key] = text;
+  }
+
+  const channel = typeof meta.channel === 'string' ? meta.channel.trim() : '';
+  if (channel && meta.accountId === undefined) {
+    const defaultAccount = String(channelMeta[channel]?.defaultAccount || '').trim();
+    if (defaultAccount) meta.accountId = defaultAccount;
+  }
+
+  return meta;
+}
+
 function stringifyJSON(raw: any): string {
   return raw === undefined ? '' : JSON.stringify(raw, null, 2);
 }
@@ -851,11 +910,14 @@ function parseStringList(raw: any): string[] {
   return [];
 }
 
-function parseNumberInput(raw: string, label: string): number | undefined {
+function parseNumberInput(raw: string, label: string, constraint?: NumberInputConstraint): number | undefined {
   const text = raw.trim();
   if (!text) return undefined;
   const value = Number(text);
   if (!Number.isFinite(value)) throw new Error(`${label} 必须是数字`);
+  if (constraint?.integer && !Number.isInteger(value)) throw new Error(`${label} 必须是整数`);
+  if (constraint?.min !== undefined && value < constraint.min) throw new Error(`${label} 不能小于 ${constraint.min}`);
+  if (constraint?.max !== undefined && value > constraint.max) throw new Error(`${label} 不能大于 ${constraint.max}`);
   return value;
 }
 
@@ -869,6 +931,29 @@ function extractModelDraft(raw: any): { primary: string; fallbacks: string } {
   return {
     primary: String(raw.primary || '').trim(),
     fallbacks: parseStringList(raw.fallbacks).join(', '),
+  };
+}
+
+function extractCompactionDraft(raw: any): { mode: '' | 'default' | 'safeguard'; maxHistoryShare: string } {
+  if (!isPlainObject(raw)) {
+    return { mode: '', maxHistoryShare: '' };
+  }
+  const mode = String(raw.mode || '').trim();
+  return {
+    mode: mode === 'default' || mode === 'safeguard' ? mode : '',
+    maxHistoryShare: raw.maxHistoryShare === undefined ? '' : String(raw.maxHistoryShare),
+  };
+}
+
+function extractIdentityDraft(raw: any): { name: string; theme: string; emoji: string; avatar: string } {
+  if (!isPlainObject(raw)) {
+    return { name: '', theme: '', emoji: '', avatar: '' };
+  }
+  return {
+    name: String(raw.name || '').trim(),
+    theme: String(raw.theme ?? raw.description ?? raw.vibe ?? raw.tone ?? '').trim(),
+    emoji: String(raw.emoji || '').trim(),
+    avatar: String(raw.avatar || '').trim(),
   };
 }
 
@@ -950,6 +1035,8 @@ function isImplicitAgent(agent?: AgentItem): boolean {
     agent.workspace ||
     agent.agentDir ||
     agent.model ||
+    agent.contextTokens !== undefined ||
+    agent.compaction ||
     agent.tools ||
     agent.sandbox ||
     agent.groupChat ||
@@ -967,11 +1054,12 @@ function isImplicitMainAgent(agent?: AgentItem): boolean {
 function createAgentFormState(agent?: AgentItem): AgentFormState {
   const modelDraft = extractModelDraft(agent?.model);
   const params = isPlainObject(agent?.params) ? agent?.params : {};
-  const identity = isPlainObject(agent?.identity) ? agent?.identity : {};
+  const identityDraft = extractIdentityDraft(agent?.identity);
   const tools = isPlainObject(agent?.tools) ? agent?.tools : {};
   const subagents = isPlainObject(agent?.subagents) ? agent?.subagents : {};
   const groupChat = isPlainObject(agent?.groupChat) ? agent?.groupChat : {};
   const sandboxDraft = extractSandboxDraft(agent?.sandbox);
+  const compactionDraft = extractCompactionDraft(agent?.compaction);
 
   return {
     ...DEFAULT_AGENT_FORM,
@@ -985,9 +1073,13 @@ function createAgentFormState(agent?: AgentItem): AgentFormState {
     paramTemperature: params.temperature === undefined ? '' : String(params.temperature),
     paramTopP: params.topP === undefined ? '' : String(params.topP),
     paramMaxTokens: params.maxTokens === undefined ? '' : String(params.maxTokens),
-    identityName: String(identity.name || '').trim(),
-    identityDescription: String(identity.description || '').trim(),
-    identityTone: String(identity.tone || '').trim(),
+    contextTokens: agent?.contextTokens === undefined ? '' : String(agent.contextTokens),
+    compactionMode: compactionDraft.mode,
+    compactionMaxHistoryShare: compactionDraft.maxHistoryShare,
+    identityName: identityDraft.name,
+    identityTheme: identityDraft.theme,
+    identityEmoji: identityDraft.emoji,
+    identityAvatar: identityDraft.avatar,
     sandboxMode: sandboxDraft.mode,
     sandboxScope: sandboxDraft.scope,
     sandboxWorkspaceAccess: sandboxDraft.workspaceAccess,
@@ -997,6 +1089,12 @@ function createAgentFormState(agent?: AgentItem): AgentFormState {
     sandboxDockerSetupCommand: sandboxDraft.dockerSetupCommand,
     sandboxDockerBinds: sandboxDraft.dockerBinds,
     groupChatMode: triStateFromValue(getNestedValue(groupChat, 'enabled')),
+    toolProfile: (() => {
+      const raw = getNestedValue(tools, 'profile');
+      return raw === 'minimal' || raw === 'coding' || raw === 'messaging' || raw === 'full' ? raw : '';
+    })(),
+    toolAllow: parseStringList(getNestedValue(tools, 'allow')).join(', '),
+    toolDeny: parseStringList(getNestedValue(tools, 'deny')).join(', '),
     agentToAgentMode: triStateFromValue(getNestedValue(tools, 'agentToAgent.enabled')),
     agentToAgentAllow: parseStringList(getNestedValue(tools, 'agentToAgent.allow')).join(', '),
     sessionVisibility: (() => {
@@ -1082,6 +1180,7 @@ export default function Agents() {
   const [channelConfigs, setChannelConfigs] = useState<Record<string, any>>({});
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [defaultModelHint, setDefaultModelHint] = useState('');
+  const [agentDefaults, setAgentDefaults] = useState<AgentDefaultsState>(EMPTY_AGENT_DEFAULTS);
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [cronJobs, setCronJobs] = useState<CronJob[]>([]);
   const [coreFilesByAgent, setCoreFilesByAgent] = useState<Record<string, AgentCoreFileEntry[]>>({});
@@ -1266,6 +1365,22 @@ export default function Agents() {
     setSandboxClearIntent(false);
   };
 
+  const applyToolPolicyPreset = (preset: AgentFormState['toolProfile']) => {
+    updateForm({ toolProfile: preset }, 'tools');
+  };
+
+  const applyHeadlessToolPreset = () => {
+    updateForm({
+      toolProfile: 'minimal',
+      toolAllow: 'group:web, group:fs',
+      toolDeny: 'group:runtime, group:ui, group:nodes, group:automation',
+    }, 'tools');
+  };
+
+  const resetToolPolicyOverrides = () => {
+    updateForm({ toolProfile: '', toolAllow: '', toolDeny: '' }, 'tools');
+  };
+
   const closeForm = () => {
     setShowForm(false);
     setMaterializingImplicitAgent(false);
@@ -1291,18 +1406,33 @@ export default function Agents() {
         const list: AgentItem[] = data.list || [];
         const incomingBindings = (data.bindings || []) as any[];
         const fallback = data.default || 'main';
+        const defaults = isPlainObject(data.defaults) ? data.defaults : {};
+        const defaultCompaction = isPlainObject(defaults.compaction) ? defaults.compaction : {};
         setDefaultAgent(fallback);
         setDefaultConfigured(data.defaultConfigured === true);
         setAgents(list);
         setBindings(incomingBindings.map((b: any) => toBindingDraft(b, fallback)));
-        nextDefaultModelHint = extractModelDraft(data.defaults?.model).primary;
+        nextDefaultModelHint = extractModelDraft(defaults.model).primary;
         setDefaultModelHint(nextDefaultModelHint);
+        const defaultContextTokens = Number(defaults.contextTokens);
+        const defaultMaxHistoryShare = Number(defaultCompaction.maxHistoryShare);
+        setAgentDefaults({
+          contextTokens: defaults.contextTokens === undefined || !Number.isFinite(defaultContextTokens) ? undefined : defaultContextTokens,
+          compactionMode: (() => {
+            const mode = String(defaultCompaction.mode || '').trim();
+            return mode === 'default' || mode === 'safeguard' ? mode : '';
+          })(),
+          compactionMaxHistoryShare: defaultCompaction.maxHistoryShare === undefined || !Number.isFinite(defaultMaxHistoryShare)
+            ? undefined
+            : defaultMaxHistoryShare,
+        });
       } else {
         setDefaultAgent('main');
         setDefaultConfigured(false);
         setAgents([]);
         setBindings([]);
         setDefaultModelHint('');
+        setAgentDefaults(EMPTY_AGENT_DEFAULTS);
       }
 
       if (channelsRes?.ok) {
@@ -1544,6 +1674,7 @@ export default function Agents() {
       const paramsObj = parseJSONText(form.paramsText, 'params');
       const modelDraft = extractModelDraft(modelObj);
       const sandboxDraft = extractSandboxDraft(sandboxObj);
+      const identityDraft = extractIdentityDraft(identityObj);
       setForm(prev => ({
         ...prev,
         modelPrimary: modelDraft.primary,
@@ -1551,9 +1682,10 @@ export default function Agents() {
         paramTemperature: isPlainObject(paramsObj) && paramsObj.temperature !== undefined ? String(paramsObj.temperature) : '',
         paramTopP: isPlainObject(paramsObj) && paramsObj.topP !== undefined ? String(paramsObj.topP) : '',
         paramMaxTokens: isPlainObject(paramsObj) && paramsObj.maxTokens !== undefined ? String(paramsObj.maxTokens) : '',
-        identityName: isPlainObject(identityObj) ? String(identityObj.name || '').trim() : '',
-        identityDescription: isPlainObject(identityObj) ? String(identityObj.description || '').trim() : '',
-        identityTone: isPlainObject(identityObj) ? String(identityObj.tone || '').trim() : '',
+        identityName: identityDraft.name,
+        identityTheme: identityDraft.theme,
+        identityEmoji: identityDraft.emoji,
+        identityAvatar: identityDraft.avatar,
         sandboxMode: sandboxDraft.mode,
         sandboxScope: sandboxDraft.scope,
         sandboxWorkspaceAccess: sandboxDraft.workspaceAccess,
@@ -1563,6 +1695,12 @@ export default function Agents() {
         sandboxDockerSetupCommand: sandboxDraft.dockerSetupCommand,
         sandboxDockerBinds: sandboxDraft.dockerBinds,
         groupChatMode: triStateFromValue(isPlainObject(groupChatObj) ? getNestedValue(groupChatObj, 'enabled') : undefined),
+        toolProfile: (() => {
+          const raw = isPlainObject(toolsObj) ? getNestedValue(toolsObj, 'profile') : '';
+          return raw === 'minimal' || raw === 'coding' || raw === 'messaging' || raw === 'full' ? raw : '';
+        })(),
+        toolAllow: isPlainObject(toolsObj) ? parseStringList(getNestedValue(toolsObj, 'allow')).join(', ') : '',
+        toolDeny: isPlainObject(toolsObj) ? parseStringList(getNestedValue(toolsObj, 'deny')).join(', ') : '',
         agentToAgentMode: triStateFromValue(isPlainObject(toolsObj) ? getNestedValue(toolsObj, 'agentToAgent.enabled') : undefined),
         agentToAgentAllow: isPlainObject(toolsObj) ? parseStringList(getNestedValue(toolsObj, 'agentToAgent.allow')).join(', ') : '',
         sessionVisibility: (() => {
@@ -1597,6 +1735,7 @@ export default function Agents() {
       setMsg('Agent ID 不能为空');
       return;
     }
+    const baseAgent = agents.find(agent => agent.id === (editingId || id));
     let modelObj: any;
     let toolsObj: any;
     let sandboxObj: any;
@@ -1605,6 +1744,8 @@ export default function Agents() {
     let subagentsObj: any;
     let paramsObj: any;
     let runtimeObj: any;
+    let parsedContextTokens: number | undefined;
+    let parsedCompactionMaxHistoryShare: number | undefined;
     try {
       modelObj = parseJSONText(form.modelText, 'model');
       toolsObj = parseJSONText(form.toolsText, 'tools');
@@ -1649,17 +1790,24 @@ export default function Agents() {
         paramsObj = cleanupObject(nextParams);
       }
 
+      parsedContextTokens = parseNumberInput(form.contextTokens, 'contextTokens', { integer: true, min: 1 });
+      parsedCompactionMaxHistoryShare = parseNumberInput(form.compactionMaxHistoryShare, 'compaction.maxHistoryShare', { min: 0, max: 1 });
+
       if (structuredTouched.identity) {
         if (identityObj !== undefined && !isPlainObject(identityObj)) {
           throw new Error('identity JSON 必须是对象才能与结构化字段合并');
         }
         const nextIdentity = isPlainObject(identityObj) ? deepClone(identityObj) : {};
+        delete nextIdentity.description;
+        delete nextIdentity.tone;
         if (form.identityName.trim()) nextIdentity.name = form.identityName.trim();
         else delete nextIdentity.name;
-        if (form.identityDescription.trim()) nextIdentity.description = form.identityDescription.trim();
-        else delete nextIdentity.description;
-        if (form.identityTone.trim()) nextIdentity.tone = form.identityTone.trim();
-        else delete nextIdentity.tone;
+        if (form.identityTheme.trim()) nextIdentity.theme = form.identityTheme.trim();
+        else delete nextIdentity.theme;
+        if (form.identityEmoji.trim()) nextIdentity.emoji = form.identityEmoji.trim();
+        else delete nextIdentity.emoji;
+        if (form.identityAvatar.trim()) nextIdentity.avatar = form.identityAvatar.trim();
+        else delete nextIdentity.avatar;
         identityObj = cleanupObject(nextIdentity);
       }
 
@@ -1679,6 +1827,14 @@ export default function Agents() {
           throw new Error('tools JSON 必须是对象才能与结构化字段合并');
         }
         const nextTools = isPlainObject(toolsObj) ? deepClone(toolsObj) : {};
+        if (form.toolProfile) nextTools.profile = form.toolProfile;
+        else delete nextTools.profile;
+        const toolAllowList = parseCSV(form.toolAllow);
+        if (toolAllowList.length > 0) nextTools.allow = toolAllowList;
+        else delete nextTools.allow;
+        const toolDenyList = parseCSV(form.toolDeny);
+        if (toolDenyList.length > 0) nextTools.deny = toolDenyList;
+        else delete nextTools.deny;
         const agentToAgentEnabled = triStateToValue(form.agentToAgentMode);
         if (agentToAgentEnabled === undefined) deleteNestedValue(nextTools, 'agentToAgent.enabled');
         else setNestedValue(nextTools, 'agentToAgent.enabled', agentToAgentEnabled);
@@ -1743,8 +1899,10 @@ export default function Agents() {
       default: effectiveIsDefault,
     };
     const clearsSandboxOverride = structuredTouched.sandbox && sandboxObj === undefined && form.sandboxText.trim() !== '' && !!editingId;
+    const clearsToolsOverride = structuredTouched.tools && toolsObj === undefined && form.toolsText.trim() !== '' && !!editingId;
     if (modelObj !== undefined) payload.model = modelObj;
-    if (toolsObj !== undefined) payload.tools = toolsObj;
+    if (clearsToolsOverride && editingId) payload.tools = null;
+    else if (toolsObj !== undefined) payload.tools = toolsObj;
     if (clearsSandboxOverride && editingId) payload.sandbox = null;
     else if (sandboxObj !== undefined) payload.sandbox = sandboxObj;
     if (groupChatObj !== undefined) payload.groupChat = groupChatObj;
@@ -1752,6 +1910,25 @@ export default function Agents() {
     if (subagentsObj !== undefined) payload.subagents = subagentsObj;
     if (paramsObj !== undefined) payload.params = paramsObj;
     if (runtimeObj !== undefined) payload.runtime = runtimeObj;
+    if (structuredTouched.context) {
+      if (parsedContextTokens === undefined) {
+        if (baseAgent?.contextTokens !== undefined) payload.contextTokens = null;
+      } else {
+        payload.contextTokens = parsedContextTokens;
+      }
+
+      const nextCompaction = isPlainObject(baseAgent?.compaction) ? deepClone(baseAgent.compaction) : {};
+      if (form.compactionMode) nextCompaction.mode = form.compactionMode;
+      else delete nextCompaction.mode;
+      if (parsedCompactionMaxHistoryShare === undefined) delete nextCompaction.maxHistoryShare;
+      else nextCompaction.maxHistoryShare = parsedCompactionMaxHistoryShare;
+      const cleanedCompaction = cleanupObject(nextCompaction);
+      if (cleanedCompaction === undefined) {
+        if (isPlainObject(baseAgent?.compaction)) payload.compaction = null;
+      } else {
+        payload.compaction = cleanedCompaction;
+      }
+    }
 
     setSaving(true);
     try {
@@ -2037,16 +2214,7 @@ export default function Agents() {
   };
 
   const runPreview = async () => {
-    const meta: Record<string, any> = {};
-    Object.entries(previewMeta).forEach(([k, v]) => {
-      if (!v.trim()) return;
-      if (k === 'roles') {
-        const roles = parseCSV(v);
-        if (roles.length > 0) meta[k] = roles;
-        return;
-      }
-      meta[k] = v.trim();
-    });
+    const meta = buildPreviewMetaPayload(previewMeta, channelMeta);
 
     setPreviewLoading(true);
     try {
@@ -2064,7 +2232,8 @@ export default function Agents() {
   };
 
   const selectedModelDraft = extractModelDraft(selectedAgent?.model);
-  const selectedIdentity = isPlainObject(selectedAgent?.identity) ? selectedAgent.identity : {};
+  const selectedCompactionDraft = extractCompactionDraft(selectedAgent?.compaction);
+  const selectedIdentity = extractIdentityDraft(selectedAgent?.identity);
   const selectedTools = isPlainObject(selectedAgent?.tools) ? selectedAgent.tools : {};
   const selectedSubagents = isPlainObject(selectedAgent?.subagents) ? selectedAgent.subagents : {};
   const selectedGroupChat = isPlainObject(selectedAgent?.groupChat) ? selectedAgent.groupChat : {};
@@ -2257,7 +2426,7 @@ export default function Agents() {
                         </div>
                         <p className="mt-1 text-sm text-gray-500">
                           <span className="font-mono">{selectedAgent.id}</span>
-                          {selectedIdentity.description ? ` · ${String(selectedIdentity.description).trim()}` : ''}
+                          {selectedIdentity.theme ? ` · ${selectedIdentity.theme}` : ''}
                         </p>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
@@ -2320,8 +2489,11 @@ export default function Agents() {
                             <div className="mt-3 space-y-2 text-sm text-gray-600 dark:text-gray-300">
                               <div>主模型（Primary）：<span className="font-medium text-gray-900 dark:text-white">{selectedModelDraft.primary || defaultModelHint || '继承默认'}</span></div>
                               <div>回退模型（Fallbacks）：{selectedModelDraft.fallbacks || '未设置'}</div>
-                              <div>身份名（Name）：{String(selectedIdentity.name || '').trim() || '未设置'}</div>
-                              <div>语气（Tone）：{String(selectedIdentity.tone || '').trim() || '未设置'}</div>
+                              <div>上下文预算（contextTokens）：{selectedAgent?.contextTokens !== undefined ? String(selectedAgent.contextTokens) : (agentDefaults.contextTokens !== undefined ? `继承默认 (${agentDefaults.contextTokens})` : '继承默认')}</div>
+                              <div>压缩模式（compaction.mode）：{selectedCompactionDraft.mode || agentDefaults.compactionMode || '继承默认'}</div>
+                              <div>身份名（Name）：{selectedIdentity.name || '未设置'}</div>
+                              <div>主题（Theme）：{selectedIdentity.theme || '未设置'}</div>
+                              <div>表情（Emoji）：{selectedIdentity.emoji || '未设置'}</div>
                             </div>
                             <button onClick={() => openEdit(selectedAgent, 'behavior')} className="mt-4 px-3 py-2 text-xs rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600">
                               编辑模型与身份（Edit Model & Identity）
@@ -2391,6 +2563,30 @@ export default function Agents() {
                               <div className="text-xs text-gray-400">最大输出（maxTokens）</div>
                               <div className="mt-1 text-gray-700 dark:text-gray-200">{isPlainObject(selectedAgent.params) && selectedAgent.params.maxTokens !== undefined ? String(selectedAgent.params.maxTokens) : '未覆盖'}</div>
                             </div>
+                            <div className="rounded-lg bg-gray-50 dark:bg-gray-900 px-3 py-3">
+                              <div className="text-xs text-gray-400">上下文预算（contextTokens）</div>
+                              <div className="mt-1 text-gray-700 dark:text-gray-200">
+                                {selectedAgent?.contextTokens !== undefined
+                                  ? String(selectedAgent.contextTokens)
+                                  : agentDefaults.contextTokens !== undefined
+                                    ? `继承默认 (${agentDefaults.contextTokens})`
+                                    : '继承默认'}
+                              </div>
+                            </div>
+                            <div className="rounded-lg bg-gray-50 dark:bg-gray-900 px-3 py-3">
+                              <div className="text-xs text-gray-400">压缩模式（compaction.mode）</div>
+                              <div className="mt-1 text-gray-700 dark:text-gray-200">
+                                {selectedCompactionDraft.mode || agentDefaults.compactionMode || '继承默认'}
+                              </div>
+                            </div>
+                            <div className="rounded-lg bg-gray-50 dark:bg-gray-900 px-3 py-3">
+                              <div className="text-xs text-gray-400">历史占比上限（compaction.maxHistoryShare）</div>
+                              <div className="mt-1 text-gray-700 dark:text-gray-200">
+                                {selectedCompactionDraft.maxHistoryShare
+                                  || (agentDefaults.compactionMaxHistoryShare !== undefined ? String(agentDefaults.compactionMaxHistoryShare) : '')
+                                  || '继承默认'}
+                              </div>
+                            </div>
                           </div>
                           <button onClick={() => openEdit(selectedAgent, 'behavior')} className="px-3 py-2 text-xs rounded-lg bg-violet-600 text-white hover:bg-violet-700">
                             编辑模型参数（Edit Model Settings）
@@ -2401,20 +2597,24 @@ export default function Agents() {
                             <h4 className="text-sm font-semibold text-gray-900 dark:text-white">身份摘要（Identity Summary）</h4>
                             <p className="text-xs text-gray-500 mt-1">业务方通常先理解“这个 Agent 是谁、以什么口吻工作”。</p>
                           </div>
-                          <div className="space-y-3 text-sm">
-                            <div className="rounded-lg bg-gray-50 dark:bg-gray-900 px-3 py-3">
-                              <div className="text-xs text-gray-400">显示名称（Name）</div>
-                              <div className="mt-1 text-gray-900 dark:text-white">{String(selectedIdentity.name || '').trim() || '未设置'}</div>
+                            <div className="space-y-3 text-sm">
+                              <div className="rounded-lg bg-gray-50 dark:bg-gray-900 px-3 py-3">
+                                <div className="text-xs text-gray-400">显示名称（Name）</div>
+                                <div className="mt-1 text-gray-900 dark:text-white">{selectedIdentity.name || '未设置'}</div>
+                              </div>
+                              <div className="rounded-lg bg-gray-50 dark:bg-gray-900 px-3 py-3">
+                                <div className="text-xs text-gray-400">主题（Theme）</div>
+                                <div className="mt-1 text-gray-700 dark:text-gray-200 whitespace-pre-wrap">{selectedIdentity.theme || '未设置'}</div>
+                              </div>
+                              <div className="rounded-lg bg-gray-50 dark:bg-gray-900 px-3 py-3">
+                                <div className="text-xs text-gray-400">表情（Emoji）</div>
+                                <div className="mt-1 text-gray-700 dark:text-gray-200">{selectedIdentity.emoji || '未设置'}</div>
+                              </div>
+                              <div className="rounded-lg bg-gray-50 dark:bg-gray-900 px-3 py-3">
+                                <div className="text-xs text-gray-400">头像（Avatar）</div>
+                                <div className="mt-1 text-gray-700 dark:text-gray-200 break-all">{selectedIdentity.avatar || '未设置'}</div>
+                              </div>
                             </div>
-                            <div className="rounded-lg bg-gray-50 dark:bg-gray-900 px-3 py-3">
-                              <div className="text-xs text-gray-400">职责描述（Description）</div>
-                              <div className="mt-1 text-gray-700 dark:text-gray-200 whitespace-pre-wrap">{String(selectedIdentity.description || '').trim() || '未设置'}</div>
-                            </div>
-                            <div className="rounded-lg bg-gray-50 dark:bg-gray-900 px-3 py-3">
-                              <div className="text-xs text-gray-400">语气风格（Tone）</div>
-                              <div className="mt-1 text-gray-700 dark:text-gray-200">{String(selectedIdentity.tone || '').trim() || '未设置'}</div>
-                            </div>
-                          </div>
                           <button onClick={() => openEdit(selectedAgent, 'behavior')} className="px-3 py-2 text-xs rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600">
                               编辑身份摘要（Edit Identity）
                             </button>
@@ -2927,9 +3127,9 @@ export default function Agents() {
               </div>
             </div>
             <div className="px-4 pt-4">
-              <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-xs text-violet-700 dark:border-violet-900/40 dark:bg-violet-950/20 dark:text-violet-200">
-                命中顺序按列表从上到下执行；如果没有任何规则命中，消息会自动回落到默认 Agent「{defaultAgent}」。
-              </div>
+                <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-xs text-violet-700 dark:border-violet-900/40 dark:bg-violet-950/20 dark:text-violet-200">
+                  固定优先级为 sender &gt; peer &gt; parentPeer &gt; guildId+roles &gt; guildId &gt; teamId &gt; accountId &gt; accountId:* &gt; channel；只有同优先级规则才按列表从上到下比较。未命中时会回落到默认 Agent「{defaultAgent}」。
+                </div>
             </div>
             <div className="p-4 space-y-3">
               {bindings.length === 0 && (
@@ -3588,38 +3788,93 @@ export default function Agents() {
                         </div>
                       </div>
                     </div>
+
+                    <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 dark:text-white">上下文预算（Context Budget）</h4>
+                        <p className="text-xs text-gray-500 mt-1">
+                          这里覆盖 <span className="font-mono">agents.defaults.contextTokens / compaction</span>；实际运行时仍会与模型真实 <span className="font-mono">contextWindow</span> 取更小值。
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-xs text-gray-500">上下文 Token 预算（contextTokens）</label>
+                          <input
+                            value={form.contextTokens}
+                            onChange={e => updateForm({ contextTokens: e.target.value }, 'context')}
+                            placeholder={agentDefaults.contextTokens !== undefined ? `默认 ${agentDefaults.contextTokens}` : '留空=继承默认'}
+                            className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500">压缩模式（compaction.mode）</label>
+                          <select
+                            value={form.compactionMode}
+                            onChange={e => updateForm({ compactionMode: e.target.value as '' | 'default' | 'safeguard' }, 'context')}
+                            className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                          >
+                            <option value="">继承默认</option>
+                            <option value="default">default</option>
+                            <option value="safeguard">safeguard</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500">历史占比上限（compaction.maxHistoryShare）</label>
+                          <input
+                            value={form.compactionMaxHistoryShare}
+                            onChange={e => updateForm({ compactionMaxHistoryShare: e.target.value }, 'context')}
+                            placeholder={agentDefaults.compactionMaxHistoryShare !== undefined ? `默认 ${agentDefaults.compactionMaxHistoryShare}` : '例如 0.5'}
+                            className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                          />
+                        </div>
+                      </div>
+                      <div className="text-[11px] text-gray-500 leading-relaxed">
+                        当前默认：contextTokens = {agentDefaults.contextTokens !== undefined ? String(agentDefaults.contextTokens) : '未设置'}，
+                        compaction.mode = {agentDefaults.compactionMode || '未设置'}，
+                        compaction.maxHistoryShare = {agentDefaults.compactionMaxHistoryShare !== undefined ? String(agentDefaults.compactionMaxHistoryShare) : '未设置'}。
+                      </div>
+                    </div>
                   </div>
 
                   <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">
                     <div>
                       <h4 className="text-sm font-semibold text-gray-900 dark:text-white">身份摘要（Identity）</h4>
-                      <p className="text-xs text-gray-500 mt-1">提供对非技术用户最常见的身份信息。保存时写入 <span className="font-mono">identity.name / description / tone</span>。</p>
+                      <p className="text-xs text-gray-500 mt-1">已对齐官方 <span className="font-mono">openclaw agents set-identity</span>：保存时写入 <span className="font-mono">identity.name / theme / emoji / avatar</span>。</p>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
-                          <label className="text-xs text-gray-500">身份名称（Identity Name）</label>
+                        <label className="text-xs text-gray-500">身份名称（Identity Name）</label>
                         <input
                           value={form.identityName}
                           onChange={e => updateForm({ identityName: e.target.value }, 'identity')}
-                          placeholder="例如 Support Agent"
+                          placeholder="例如 OpenClaw"
+                          className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500">主题（Theme）</label>
+                        <input
+                          value={form.identityTheme}
+                          onChange={e => updateForm({ identityTheme: e.target.value }, 'identity')}
+                          placeholder="例如 space lobster"
+                          className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500">表情（Emoji）</label>
+                        <input
+                          value={form.identityEmoji}
+                          onChange={e => updateForm({ identityEmoji: e.target.value }, 'identity')}
+                          placeholder="例如 🦞"
                           className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
                         />
                       </div>
                       <div className="md:col-span-2">
-                          <label className="text-xs text-gray-500">职责描述（Description）</label>
+                        <label className="text-xs text-gray-500">头像（Avatar）</label>
                         <input
-                          value={form.identityDescription}
-                          onChange={e => updateForm({ identityDescription: e.target.value }, 'identity')}
-                          placeholder="一句话说明职责与边界"
-                          className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
-                        />
-                      </div>
-                      <div className="md:col-span-3">
-                          <label className="text-xs text-gray-500">语气风格（Tone / Style）</label>
-                        <input
-                          value={form.identityTone}
-                          onChange={e => updateForm({ identityTone: e.target.value }, 'identity')}
-                          placeholder="例如 专业、克制、对外沟通友好"
+                          value={form.identityAvatar}
+                          onChange={e => updateForm({ identityAvatar: e.target.value }, 'identity')}
+                          placeholder="工作区相对路径、http(s) URL 或 data URI"
                           className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
                         />
                       </div>
@@ -3808,6 +4063,91 @@ export default function Agents() {
                       </div>
                     </div>
                     <p className="text-[11px] text-gray-400">如果你要进一步配置 <span className="font-mono">tools.sandbox.tools</span>、<span className="font-mono">tools.elevated</span>、<span className="font-mono">sandbox.browser.*</span>、<span className="font-mono">docker.image/user/env</span>，请继续在 Advanced JSON 里编辑。</p>
+                  </div>
+
+                  <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">
+                    <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Per-Agent 工具治理（Profile / Allow / Deny）</h4>
+                        <p className="text-xs text-gray-500 mt-1">对标官方 Agents 面板里最常用的 Tool Access 起点：先选 profile，再按需补 <span className="font-mono">tools.allow / tools.deny</span>。</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={applyHeadlessToolPreset}
+                          className="px-3 py-2 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700"
+                        >
+                          套用“传统无头”建议
+                        </button>
+                        <button
+                          type="button"
+                          onClick={resetToolPolicyOverrides}
+                          className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900"
+                        >
+                          清空所有工具覆盖
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                      {TOOL_POLICY_PRESETS.map(preset => {
+                        const active = form.toolProfile === preset.id;
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => applyToolPolicyPreset(preset.id)}
+                            className={`text-left rounded-xl border px-4 py-4 transition-colors ${
+                              active
+                                ? 'border-violet-400 bg-violet-50 dark:border-violet-700 dark:bg-violet-900/20'
+                                : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-violet-300 dark:hover:border-violet-700'
+                            }`}
+                          >
+                            <div className="text-sm font-semibold text-gray-900 dark:text-white">{preset.label}</div>
+                            <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{preset.help}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-[220px,1fr] gap-4">
+                      <div>
+                        <label className="text-xs text-gray-500">工具 Profile（tools.profile）</label>
+                        <select
+                          value={form.toolProfile}
+                          onChange={e => updateForm({ toolProfile: e.target.value as AgentFormState['toolProfile'] }, 'tools')}
+                          className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                        >
+                          {TOOL_POLICY_PRESETS.map(preset => (
+                            <option key={preset.label} value={preset.id}>{preset.label}</option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-[11px] text-gray-400">留在 Inherit 时不会写入 per-agent <span className="font-mono">tools.profile</span> 覆盖。</p>
+                      </div>
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-xs text-gray-500">Allow 列表（tools.allow）</label>
+                          <textarea
+                            rows={4}
+                            value={form.toolAllow}
+                            onChange={e => updateForm({ toolAllow: e.target.value }, 'tools')}
+                            placeholder="逗号分隔，例如 group:web, group:fs"
+                            className="w-full mt-1 px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500">Deny 列表（tools.deny）</label>
+                          <textarea
+                            rows={4}
+                            value={form.toolDeny}
+                            onChange={e => updateForm({ toolDeny: e.target.value }, 'tools')}
+                            placeholder="逗号分隔，例如 group:runtime, group:ui, group:nodes, group:automation"
+                            className="w-full mt-1 px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-gray-400">这三项是最常用的 per-agent 工具治理入口；更细的 <span className="font-mono">tools.sandbox.tools</span> 与 <span className="font-mono">tools.elevated</span> 继续放在 Advanced JSON。</p>
                   </div>
 
                   <div className="rounded-xl border border-gray-100 dark:border-gray-700 p-4 space-y-4">

@@ -35,6 +35,20 @@ const KNOWN_PROVIDERS: { id: string; name: string; nameZh?: string; baseUrl: str
 
 type ConfigTab = 'models' | 'identity' | 'general' | 'version' | 'env' | 'health';
 type ConfigDiffItem = { path: string; before: string; after: string };
+type BrowserControlPreset = 'disabled' | 'managed' | 'custom';
+type BrowserProfileMode = 'openclaw' | 'chrome' | 'custom';
+type ToolProfilePreset = 'minimal' | 'coding' | 'messaging' | 'full';
+type CfgField = {
+  path: string;
+  label: string;
+  type: 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'select';
+  options?: string[];
+  placeholder?: string;
+  help?: string;
+  min?: number;
+  max?: number;
+  integer?: boolean;
+};
 
 function cloneConfig<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? {}));
@@ -74,6 +88,85 @@ function buildConfigDiff(before: any, after: any, prefix = ''): ConfigDiffItem[]
   });
   return result;
 }
+
+function readConfigValue(raw: any, path: string): any {
+  return path.split('.').reduce((acc: any, key: string) => (acc && typeof acc === 'object' && !Array.isArray(acc) ? acc[key] : undefined), raw);
+}
+
+function validateNumericFieldValue(raw: any, field: Pick<CfgField, 'label' | 'min' | 'max' | 'integer'>): string | null {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw.trim()) : Number.NaN;
+  if (!Number.isFinite(value)) return `${field.label} 必须是数字`;
+  if (field.integer && !Number.isInteger(value)) return `${field.label} 必须是整数`;
+  if (field.min !== undefined && value < field.min) return `${field.label} 不能小于 ${field.min}`;
+  if (field.max !== undefined && value > field.max) return `${field.label} 不能大于 ${field.max}`;
+  return null;
+}
+
+function getBrowserConfigDraft(config: any): Record<string, any> {
+  const browser = config?.browser;
+  if (browser && typeof browser === 'object' && !Array.isArray(browser)) return browser;
+  return {};
+}
+
+function getRawBrowserDefaultProfile(config: any): string {
+  const browser = getBrowserConfigDraft(config);
+  return typeof browser.defaultProfile === 'string' ? browser.defaultProfile.trim() : '';
+}
+
+function getEffectiveBrowserEnabled(config: any): boolean {
+  const browser = getBrowserConfigDraft(config);
+  return browser.enabled !== false;
+}
+
+function getEffectiveBrowserDefaultProfile(config: any): string {
+  const raw = getRawBrowserDefaultProfile(config);
+  return raw || 'openclaw';
+}
+
+function getBrowserControlPreset(config: any): BrowserControlPreset {
+  if (!getEffectiveBrowserEnabled(config)) return 'disabled';
+  return getEffectiveBrowserDefaultProfile(config) === 'openclaw' ? 'managed' : 'custom';
+}
+
+function getBrowserProfileMode(config: any): BrowserProfileMode {
+  const effective = getEffectiveBrowserDefaultProfile(config);
+  if (effective === 'openclaw' || effective === 'chrome') return effective;
+  return 'custom';
+}
+
+function parseConfigListInput(value: string): string[] {
+  return value
+    .split(/[\n,，]+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter((item, index, arr) => arr.indexOf(item) === index);
+}
+
+function formatConfigList(value: any): string {
+  if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean).join(', ');
+  if (typeof value === 'string') return value;
+  return '';
+}
+
+const TOOL_GOVERNANCE_PRESETS: Record<ToolProfilePreset, { label: string; help: string }> = {
+  minimal: {
+    label: 'Minimal',
+    help: '只保留最小会话能力，适合作为最保守的起点。',
+  },
+  coding: {
+    label: 'Coding',
+    help: '偏向编码/文件/运行时的常用组合，适合代码型 Agent。',
+  },
+  messaging: {
+    label: 'Messaging',
+    help: '偏向消息与渠道场景，适合聊天入口型 Agent。',
+  },
+  full: {
+    label: 'Full',
+    help: '完整工具面；只有在你明确知道后果时才建议长期使用。',
+  },
+};
 
 export default function SystemConfig() {
   const { t: i18n } = useI18n();
@@ -289,6 +382,30 @@ export default function SystemConfig() {
       if ((!hooks.token || !String(hooks.token).trim()) && hooks.secret) hooks.token = hooks.secret;
       if ('basePath' in hooks) delete hooks.basePath;
       if ('secret' in hooks) delete hooks.secret;
+    }
+
+    const browser = clone?.browser;
+    if (browser && typeof browser === 'object' && !Array.isArray(browser)) {
+      if (browser.enabled === false) {
+        delete browser.defaultProfile;
+      } else if (typeof browser.defaultProfile === 'string') {
+        const trimmed = browser.defaultProfile.trim();
+        if (trimmed) browser.defaultProfile = trimmed;
+        else delete browser.defaultProfile;
+      }
+    }
+
+    const numericFields: CfgField[] = [
+      { path: 'session.maintenance.maxEntries', label: '会话条目上限', type: 'number', integer: true, min: 1 },
+      { path: 'agents.defaults.contextTokens', label: '默认上下文 Token 预算', type: 'number', integer: true, min: 1 },
+      { path: 'agents.defaults.maxConcurrent', label: '最大并发', type: 'number', integer: true, min: 1 },
+      { path: 'agents.defaults.compaction.maxHistoryShare', label: '历史占比上限', type: 'number', min: 0, max: 1 },
+      { path: 'gateway.port', label: '端口', type: 'number', integer: true, min: 1, max: 65535 },
+      { path: 'session.agentToAgent.maxPingPongTurns', label: '最大来回委托轮次', type: 'number', integer: true, min: 1 },
+    ];
+    for (const field of numericFields) {
+      const error = validateNumericFieldValue(readConfigValue(clone, field.path), field);
+      if (error) throw new Error(error);
     }
 
     return clone;
@@ -775,18 +892,48 @@ export default function SystemConfig() {
               
               <CfgSection title="消息配置" icon={MessageSquare} fields={[
                 { path: 'messages.responsePrefix', label: '回复前缀', type: 'text' as const, placeholder: '[OpenClaw]' },
-                { path: 'session.maintenance.maxEntries', label: '会话条目上限', type: 'number' as const, placeholder: '2000' },
+                { path: 'session.maintenance.maxEntries', label: '会话条目上限', type: 'number' as const, placeholder: '2000', integer: true, min: 1 },
                 { path: 'messages.ackReactionScope', label: '确认反应范围', type: 'select' as const, options: ['all', 'group-mentions', 'group-all', 'direct', 'off', 'none'] },
               ]} getVal={getVal} setVal={setVal} />
             </div>
             
             <div className="space-y-6">
-              <CfgSection title="Agent 默认设置" icon={Brain} fields={[
-                { path: 'agents.defaults.contextTokens', label: '上下文Token数', type: 'number' as const, placeholder: '200000' },
-                { path: 'agents.defaults.maxConcurrent', label: '最大并发', type: 'number' as const, placeholder: '4' },
-                { path: 'agents.defaults.compaction.mode', label: '压缩模式', type: 'select' as const, options: ['default', 'safeguard'] },
-                { path: 'agents.defaults.compaction.maxHistoryShare', label: '历史占比上限', type: 'number' as const, placeholder: '0.5' },
-              ]} getVal={getVal} setVal={setVal} />
+              <CfgSection
+                title="Agent 默认设置"
+                icon={Brain}
+                description="这里控制所有未单独覆盖的 Agent 默认上下文预算；单个 Agent 可在 Agent 管理页继续覆盖 contextTokens / compaction。"
+                defaultExpanded
+                fields={[
+                  {
+                    path: 'agents.defaults.contextTokens',
+                    label: '默认上下文 Token 预算',
+                    type: 'number' as const,
+                    placeholder: '200000',
+                    help: 'OpenClaw 会再与模型真实 contextWindow 取更小值；留空表示不在面板里显式覆盖。',
+                    integer: true,
+                    min: 1,
+                  },
+                  { path: 'agents.defaults.maxConcurrent', label: '最大并发', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
+                  {
+                    path: 'agents.defaults.compaction.mode',
+                    label: '压缩模式',
+                    type: 'select' as const,
+                    options: ['default', 'safeguard'],
+                    help: 'default 为常规裁剪；safeguard 会更保守地压缩工具结果。',
+                  },
+                  {
+                    path: 'agents.defaults.compaction.maxHistoryShare',
+                    label: '历史占比上限',
+                    type: 'number' as const,
+                    placeholder: '0.5',
+                    help: '控制历史消息最多可占上下文预算的比例。',
+                    min: 0,
+                    max: 1,
+                  },
+                ]}
+                getVal={getVal}
+                setVal={setVal}
+              />
             </div>
           </div>
 
@@ -865,7 +1012,7 @@ export default function SystemConfig() {
       {tab === 'general' && (
         <div className="space-y-3">
           <CfgSection title="网关配置" icon={Globe} fields={[
-            { path: 'gateway.port', label: '端口', type: 'number' as const, placeholder: '18789' },
+            { path: 'gateway.port', label: '端口', type: 'number' as const, placeholder: '18789', integer: true, min: 1, max: 65535 },
             { path: 'gateway.mode', label: '模式', type: 'select' as const, options: ['local', 'remote'] },
             { path: 'gateway.bind', label: '绑定', type: 'select' as const, options: ['auto', 'loopback', 'lan', 'tailnet', 'custom'] },
             { path: 'gateway.customBindHost', label: '自定义绑定地址', type: 'text' as const, placeholder: '0.0.0.0 / 127.0.0.1 / ::1' },
@@ -874,9 +1021,12 @@ export default function SystemConfig() {
           ]} getVal={getVal} setVal={setVal} />
           <CfgSection title="多智能体协同" icon={Users} fields={[
             { path: 'tools.agentToAgent.enabled', label: '启用 Agent 间委托', type: 'toggle' as const },
-            { path: 'session.agentToAgent.maxPingPongTurns', label: '最大来回委托轮次', type: 'number' as const, placeholder: '4' },
+            { path: 'session.agentToAgent.maxPingPongTurns', label: '最大来回委托轮次', type: 'number' as const, placeholder: '4', integer: true, min: 1 },
             { path: 'tools.sessions.visibility', label: '会话可见性', type: 'select' as const, options: ['same-agent', 'all-agents'] },
           ]} getVal={getVal} setVal={setVal} />
+          <SessionIsolationSection config={config} updateConfig={updateConfig} />
+          <BrowserControlSection config={config} updateConfig={updateConfig} />
+          <ToolGovernanceSection config={config} updateConfig={updateConfig} />
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-5 space-y-2">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-gray-900 dark:text-white">Agent 间委托白名单</h3>
@@ -890,7 +1040,7 @@ export default function SystemConfig() {
                 return '';
               })()}
               onChange={e => {
-                const list = e.target.value.split(',').map(x => x.trim()).filter(Boolean);
+                const list = parseConfigListInput(e.target.value);
                 setVal('tools.agentToAgent.allow', list);
               }}
               placeholder="例如: *, main->work, work->main"
@@ -1683,12 +1833,12 @@ function ProviderHealthCheck({ pid, prov }: { pid: string; prov: any }) {
   );
 }
 
-function CfgSection({ title, icon: Icon, fields, getVal, setVal }: {
-  title: string; icon: any;
-  fields: { path: string; label: string; type: 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'select'; options?: string[]; placeholder?: string }[];
+function CfgSection({ title, icon: Icon, description, defaultExpanded = false, fields, getVal, setVal }: {
+  title: string; icon: any; description?: string; defaultExpanded?: boolean;
+  fields: CfgField[];
   getVal: (p: string) => any; setVal: (p: string, v: any) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden transition-all hover:shadow-md">
       <button onClick={() => setExpanded(!expanded)}
@@ -1698,7 +1848,14 @@ function CfgSection({ title, icon: Icon, fields, getVal, setVal }: {
         </div>
         <div className="flex-1">
           <span className="text-sm font-bold text-gray-900 dark:text-white block">{title}</span>
-          <span className="text-[10px] text-gray-400 mt-0.5">{fields.length} 个配置项</span>
+          {description ? (
+            <>
+              <span className="text-[10px] text-gray-400 mt-0.5 block leading-relaxed">{description}</span>
+              <span className="text-[10px] text-gray-400 mt-1 block">{fields.length} 个配置项</span>
+            </>
+          ) : (
+            <span className="text-[10px] text-gray-400 mt-0.5">{fields.length} 个配置项</span>
+          )}
         </div>
         {expanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
       </button>
@@ -1735,10 +1892,21 @@ function CfgSection({ title, icon: Icon, fields, getVal, setVal }: {
                   </select>
                   <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 </div>
+              ) : field.type === 'number' ? (
+                <CfgNumberInput
+                  value={getVal(field.path)}
+                  placeholder={field.placeholder}
+                  label={field.label}
+                  integer={field.integer}
+                  min={field.min}
+                  max={field.max}
+                  onCommit={next => setVal(field.path, next)}
+                />
               ) : (
                 <div className="relative group">
-                  <input type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
-                    value={getVal(field.path) ?? ''} onChange={e => setVal(field.path, field.type === 'number' ? Number(e.target.value) : e.target.value)}
+                  <input type={field.type === 'password' ? 'password' : 'text'}
+                    value={getVal(field.path) ?? ''}
+                    onChange={e => setVal(field.path, e.target.value)}
                     placeholder={field.placeholder}
                     className="w-full px-3.5 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 transition-all placeholder:text-gray-400" />
                   {field.type === 'password' && (
@@ -1748,11 +1916,634 @@ function CfgSection({ title, icon: Icon, fields, getVal, setVal }: {
                   )}
                 </div>
               )}
+              {field.help && (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{field.help}</p>
+              )}
             </div>
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+function SessionIsolationSection({
+  config,
+  updateConfig,
+}: {
+  config: any;
+  updateConfig: (mutate: (draft: any) => void) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const rawDmScope = typeof readConfigValue(config, 'session.dmScope') === 'string'
+    ? String(readConfigValue(config, 'session.dmScope')).trim()
+    : '';
+  const scopeCards: Array<{ id: string; label: string; help: string }> = [
+    { id: 'main', label: 'main', help: '所有私聊尽量复用主会话，隔离最弱。' },
+    { id: 'per-peer', label: 'per-peer', help: '按私聊对端拆分，适合单账号单渠道。' },
+    { id: 'per-channel-peer', label: 'per-channel-peer', help: '按渠道 + 私聊对端拆分，适合多渠道并行。' },
+    { id: 'per-account-channel-peer', label: 'per-account-channel-peer', help: '按账号 + 渠道 + 私聊对端拆分，适合飞书多账号。' },
+  ];
+
+  const setDmScope = (next: string) => {
+    updateConfig((draft: any) => {
+      if (!draft.session || typeof draft.session !== 'object' || Array.isArray(draft.session)) draft.session = {};
+      draft.session.dmScope = next;
+    });
+  };
+
+  const clearDmScope = () => {
+    updateConfig((draft: any) => {
+      if (draft.session && typeof draft.session === 'object' && !Array.isArray(draft.session)) {
+        delete draft.session.dmScope;
+      }
+    });
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden transition-all hover:shadow-md">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors"
+      >
+        <div className={`p-2 rounded-lg transition-colors ${expanded ? 'bg-sky-100 dark:bg-sky-900/30 text-sky-600' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}>
+          <Users size={18} />
+        </div>
+        <div className="flex-1">
+          <span className="text-sm font-bold text-gray-900 dark:text-white block">私聊上下文隔离</span>
+          <span className="text-[10px] text-gray-400 mt-0.5 block leading-relaxed">
+            配置 <span className="font-mono">session.dmScope</span>，控制 OpenClaw 如何为私聊拆分会话键。
+          </span>
+          <span className="text-[10px] text-gray-400 mt-1 block">
+            当前：{rawDmScope || '未显式设置（运行时等价 main）'}
+          </span>
+        </div>
+        {expanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-6 pt-2 border-t border-gray-50 dark:border-gray-800/50 space-y-5 animate-in slide-in-from-top-2 duration-200">
+          <div className="rounded-xl border border-gray-200 bg-gray-50/80 dark:border-gray-700 dark:bg-gray-900/30 p-4 text-[12px] text-gray-700 dark:text-gray-200 space-y-2">
+            <div className="font-semibold">作用范围</div>
+            <div><span className="font-mono">session.dmScope</span> 决定私聊会话是否按用户、渠道、账号继续拆分；群聊 / 私聊准入策略不会替代它。</div>
+            <div>如果你在飞书中启用了多账号或依赖 <span className="font-mono">accountId</span> 路由，建议显式设置为 <span className="font-mono">per-account-channel-peer</span>。</div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            {scopeCards.map(card => {
+              const active = rawDmScope === card.id;
+              const recommended = card.id === 'per-account-channel-peer';
+              return (
+                <button
+                  key={card.id}
+                  type="button"
+                  onClick={() => setDmScope(card.id)}
+                  className={`text-left rounded-xl border px-4 py-4 transition-colors ${
+                    active
+                      ? 'border-sky-400 bg-sky-50 dark:border-sky-700 dark:bg-sky-900/20'
+                      : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-sky-300 dark:hover:border-sky-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-gray-900 dark:text-white">{card.label}</span>
+                    {recommended && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300">
+                        推荐
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{card.help}</p>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,260px),1fr] gap-4 items-start">
+            <div>
+              <label className="text-xs text-gray-500">session.dmScope</label>
+              <select
+                value={rawDmScope}
+                onChange={e => {
+                  if (!e.target.value) {
+                    clearDmScope();
+                    return;
+                  }
+                  setDmScope(e.target.value);
+                }}
+                className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+              >
+                <option value="">未配置（运行时等价 main）</option>
+                {scopeCards.map(card => (
+                  <option key={card.id} value={card.id}>{card.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="rounded-xl border border-sky-100 bg-sky-50/80 dark:border-sky-900/40 dark:bg-sky-950/20 px-4 py-3 text-[12px] text-sky-800 dark:text-sky-200 space-y-1.5">
+              <div className="font-medium">飞书多账号推荐</div>
+              <div>当 <span className="font-mono">channels.feishu.accounts/defaultAccount</span> 与 Agent 路由里的 <span className="font-mono">accountId</span> 一起使用时，优先选择 <span className="font-mono">per-account-channel-peer</span>。</div>
+              <button
+                type="button"
+                onClick={clearDmScope}
+                className="mt-1 inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-md border border-sky-200 dark:border-sky-800 hover:bg-white/70 dark:hover:bg-black/10"
+              >
+                恢复为未配置
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolGovernanceSection({
+  config,
+  updateConfig,
+}: {
+  config: any;
+  updateConfig: (mutate: (draft: any) => void) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const rawProfile = String(readConfigValue(config, 'tools.profile') || '').trim();
+  const allowText = formatConfigList(readConfigValue(config, 'tools.allow'));
+  const denyText = formatConfigList(readConfigValue(config, 'tools.deny'));
+  const [allowDraft, setAllowDraft] = useState(allowText);
+  const [denyDraft, setDenyDraft] = useState(denyText);
+  const suppressAllowSyncRef = useRef(false);
+  const suppressDenySyncRef = useRef(false);
+
+  useEffect(() => {
+    if (suppressAllowSyncRef.current) {
+      suppressAllowSyncRef.current = false;
+      return;
+    }
+    setAllowDraft(allowText);
+  }, [allowText]);
+
+  useEffect(() => {
+    if (suppressDenySyncRef.current) {
+      suppressDenySyncRef.current = false;
+      return;
+    }
+    setDenyDraft(denyText);
+  }, [denyText]);
+
+  const mutateTools = (mutate: (toolsDraft: Record<string, any>) => void) => {
+    updateConfig((draft: any) => {
+      if (!draft.tools || typeof draft.tools !== 'object' || Array.isArray(draft.tools)) draft.tools = {};
+      mutate(draft.tools);
+    });
+  };
+
+  const setToolList = (key: 'allow' | 'deny', value: string) => {
+    mutateTools((toolsDraft) => {
+      const list = parseConfigListInput(value);
+      if (list.length > 0) toolsDraft[key] = list;
+      else delete toolsDraft[key];
+    });
+  };
+
+  const setToolProfile = (next: string) => {
+    mutateTools((toolsDraft) => {
+      if (next) toolsDraft.profile = next;
+      else delete toolsDraft.profile;
+    });
+  };
+
+  const applyHeadlessPreset = () => {
+    mutateTools((toolsDraft) => {
+      toolsDraft.profile = 'minimal';
+      toolsDraft.allow = ['group:web', 'group:fs'];
+      toolsDraft.deny = ['group:runtime', 'group:ui', 'group:nodes', 'group:automation'];
+    });
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden transition-all hover:shadow-md">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors"
+      >
+        <div className={`p-2 rounded-lg transition-colors ${expanded ? 'bg-violet-100 dark:bg-violet-900/30 text-violet-600' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}>
+          <Shield size={18} />
+        </div>
+        <div className="flex-1">
+          <span className="text-sm font-bold text-gray-900 dark:text-white block">工具治理</span>
+          <span className="text-[10px] text-gray-400 mt-0.5 block leading-relaxed">
+            把 <span className="font-mono">tools.profile / tools.allow / tools.deny</span> 做成可视化入口，方便把 OpenClaw 收敛到“传统无头”范围。
+          </span>
+          <span className="text-[10px] text-gray-400 mt-1 block">
+            当前 profile：{rawProfile || '未显式设置'}
+          </span>
+        </div>
+        {expanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-6 pt-2 border-t border-gray-50 dark:border-gray-800/50 space-y-5 animate-in slide-in-from-top-2 duration-200">
+          <div className="rounded-xl border border-violet-100 bg-violet-50/80 dark:border-violet-900/40 dark:bg-violet-950/20 p-4 text-[12px] text-violet-800 dark:text-violet-200 space-y-2">
+            <div className="font-semibold">治理边界</div>
+            <div><span className="font-mono">deny</span> 的优先级高于 <span className="font-mono">allow</span>；被拒绝的工具不会再暴露给模型。</div>
+            <div>浏览器、原生命令、重启和插件启停仍分别在本页其他区域或插件页管理；这里专门负责“模型能看到哪些工具”。</div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            {(Object.entries(TOOL_GOVERNANCE_PRESETS) as Array<[ToolProfilePreset, { label: string; help: string }]>).map(([presetId, meta]) => {
+              const active = rawProfile === presetId;
+              return (
+                <button
+                  key={presetId}
+                  type="button"
+                  onClick={() => setToolProfile(presetId)}
+                  className={`text-left rounded-xl border px-4 py-4 transition-colors ${
+                    active
+                      ? 'border-violet-400 bg-violet-50 dark:border-violet-700 dark:bg-violet-900/20'
+                      : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-violet-300 dark:hover:border-violet-700'
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-gray-900 dark:text-white">{meta.label}</div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{meta.help}</p>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,260px),1fr] gap-4">
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs text-gray-500">tools.profile</label>
+                <select
+                  value={rawProfile}
+                  onChange={e => setToolProfile(e.target.value)}
+                  className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                >
+                  <option value="">未配置</option>
+                  {Object.entries(TOOL_GOVERNANCE_PRESETS).map(([presetId, meta]) => (
+                    <option key={presetId} value={presetId}>{meta.label}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={applyHeadlessPreset}
+                className="w-full px-3 py-2.5 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700"
+              >
+                一键套用“传统无头”建议
+              </button>
+              <p className="text-[11px] text-gray-400 leading-relaxed">
+                这会把 profile 设为 <span className="font-mono">minimal</span>，只补回 <span className="font-mono">group:web / group:fs</span>，并显式拒绝 runtime、UI、nodes、automation 四大扩展面。
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-gray-500">tools.allow</label>
+                  <span className="text-[10px] text-gray-400">支持逗号、中文逗号或换行分隔</span>
+                </div>
+                <textarea
+                  rows={4}
+                  value={allowDraft}
+                  onChange={e => {
+                    suppressAllowSyncRef.current = true;
+                    setAllowDraft(e.target.value);
+                    setToolList('allow', e.target.value);
+                  }}
+                  placeholder="例如: group:web, group:fs"
+                  className="w-full mt-1 px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-gray-500">tools.deny</label>
+                  <span className="text-[10px] text-gray-400">deny 优先于 allow</span>
+                </div>
+                <textarea
+                  rows={4}
+                  value={denyDraft}
+                  onChange={e => {
+                    suppressDenySyncRef.current = true;
+                    setDenyDraft(e.target.value);
+                    setToolList('deny', e.target.value);
+                  }}
+                  placeholder="例如: group:runtime, group:ui, group:nodes, group:automation"
+                  className="w-full mt-1 px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BrowserControlSection({
+  config,
+  updateConfig,
+}: {
+  config: any;
+  updateConfig: (mutate: (draft: any) => void) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const browser = getBrowserConfigDraft(config);
+  const enabled = getEffectiveBrowserEnabled(config);
+  const rawDefaultProfile = getRawBrowserDefaultProfile(config);
+  const effectiveDefaultProfile = getEffectiveBrowserDefaultProfile(config);
+  const preset = getBrowserControlPreset(config);
+  const profileMode = getBrowserProfileMode(config);
+  const advancedKeys = Object.keys(browser).filter(key => !['enabled', 'defaultProfile'].includes(key));
+
+  const mutateBrowser = (mutate: (browserDraft: Record<string, any>) => void) => {
+    updateConfig((draft: any) => {
+      if (!draft.browser || typeof draft.browser !== 'object' || Array.isArray(draft.browser)) draft.browser = {};
+      mutate(draft.browser);
+    });
+  };
+
+  const applyPreset = (next: Extract<BrowserControlPreset, 'disabled' | 'managed'>) => {
+    mutateBrowser((browserDraft) => {
+      if (next === 'disabled') {
+        browserDraft.enabled = false;
+        delete browserDraft.defaultProfile;
+        return;
+      }
+      browserDraft.enabled = true;
+      browserDraft.defaultProfile = 'openclaw';
+    });
+  };
+
+  const toggleEnabled = () => {
+    mutateBrowser((browserDraft) => {
+      const next = browserDraft.enabled === false;
+      browserDraft.enabled = next;
+      if (next) {
+        browserDraft.defaultProfile = 'openclaw';
+      } else {
+        delete browserDraft.defaultProfile;
+      }
+    });
+  };
+
+  const setProfileMode = (next: Exclude<BrowserProfileMode, 'custom'>) => {
+    mutateBrowser((browserDraft) => {
+      browserDraft.enabled = true;
+      browserDraft.defaultProfile = next;
+    });
+  };
+
+  const statusTone =
+    preset === 'disabled'
+      ? 'border-gray-200 bg-gray-50/70 text-gray-700 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-200'
+      : preset === 'managed'
+        ? 'border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200'
+        : 'border-amber-200 bg-amber-50/70 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200';
+
+  const statusTitle =
+    preset === 'disabled'
+      ? '当前状态：浏览器控制已禁用'
+      : preset === 'managed'
+        ? advancedKeys.length > 0
+          ? `当前状态：默认 profile = ${effectiveDefaultProfile}（含高级 browser.* 配置）`
+          : `当前状态：托管浏览器（${effectiveDefaultProfile}）`
+        : `当前状态：自定义 browser.defaultProfile = ${effectiveDefaultProfile}`;
+
+  const statusDescription =
+    preset === 'disabled'
+      ? '等价于方案 A。OpenClaw 不再主动触发浏览器控制。'
+      : preset === 'managed'
+        ? advancedKeys.length > 0
+          ? '默认 profile 已锁定为 openclaw，但检测到其他 browser.* 高级字段；因此它不一定完全等价于最小托管预设，请同时结合这些高级项判断真实运行行为。'
+          : '等价于方案 B。会显式锁定到 OpenClaw 托管的独立 profile，避免依赖上游默认值。'
+        : '当前配置偏离了这两个安全预设，请确认这就是你想要的浏览器接管方式。';
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden transition-all hover:shadow-md">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors"
+      >
+        <div className={`p-2 rounded-lg transition-colors ${expanded ? 'bg-violet-100 dark:bg-violet-900/30 text-violet-600' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}>
+          <Monitor size={18} />
+        </div>
+        <div className="flex-1">
+          <span className="text-sm font-bold text-gray-900 dark:text-white block">浏览器控制</span>
+          <span className="text-[10px] text-gray-400 mt-0.5 block leading-relaxed">
+            围绕“彻底禁用浏览器控制 / 显式锁定托管 openclaw profile”两个安全方案做可视化管控。
+          </span>
+          <span className="text-[10px] text-gray-400 mt-1 block">2 个核心开关 + 2 个安全预设</span>
+        </div>
+        {expanded ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-6 pt-2 border-t border-gray-50 dark:border-gray-800/50 space-y-5 animate-in slide-in-from-top-2 duration-200">
+          <div className={`rounded-xl border p-4 ${statusTone}`}>
+            <div className="flex items-center gap-2">
+              {preset === 'disabled' ? <EyeOff size={16} /> : preset === 'managed' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+              <span className="text-xs font-semibold">{statusTitle}</span>
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed opacity-90">{statusDescription}</p>
+            {enabled && !rawDefaultProfile && (
+              <p className="mt-2 text-[11px] leading-relaxed opacity-90">
+                当前配置未显式写入 <code className="mx-0.5 rounded border border-current/20 bg-white/60 px-1 py-0.5 font-mono dark:bg-black/10">browser.defaultProfile</code>，
+                但根据上游代码实际会默认使用 <code className="mx-0.5 rounded border border-current/20 bg-white/60 px-1 py-0.5 font-mono dark:bg-black/10">openclaw</code>。
+                点击下方“托管浏览器”预设可把这个默认值固化进配置，避免后续版本/文档漂移。
+              </p>
+            )}
+            {advancedKeys.length > 0 && (
+              <p className="mt-2 text-[11px] leading-relaxed opacity-90">
+                检测到其他 <code className="mx-0.5 rounded border border-current/20 bg-white/60 px-1 py-0.5 font-mono dark:bg-black/10">browser.*</code> 高级字段：
+                {' '}
+                <span className="font-mono">{advancedKeys.join(', ')}</span>。本区只会调整
+                {' '}
+                <code className="mx-0.5 rounded border border-current/20 bg-white/60 px-1 py-0.5 font-mono dark:bg-black/10">browser.enabled</code>
+                和
+                {' '}
+                <code className="mx-0.5 rounded border border-current/20 bg-white/60 px-1 py-0.5 font-mono dark:bg-black/10">browser.defaultProfile</code>，不会覆盖这些高级项。
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => applyPreset('disabled')}
+              className={`rounded-xl border p-4 text-left transition-all ${
+                preset === 'disabled'
+                  ? 'border-violet-300 bg-violet-50 dark:border-violet-700 dark:bg-violet-950/20 shadow-sm'
+                  : 'border-gray-200 dark:border-gray-700 hover:border-violet-200 hover:bg-gray-50 dark:hover:bg-gray-900/40'
+              }`}
+            >
+              <div className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+                <EyeOff size={16} className="text-gray-500 dark:text-gray-300" />
+                方案 A：彻底禁用浏览器控制
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                适合你根本不想让 OpenClaw 碰浏览器的场景。保存后核心行为等价于：
+              </p>
+              <pre className="mt-2 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/60 p-3 text-[11px] text-gray-700 dark:text-gray-300 overflow-x-auto font-mono">{`{\n  "browser": {\n    "enabled": false\n  }\n}`}</pre>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => applyPreset('managed')}
+              className={`rounded-xl border p-4 text-left transition-all ${
+                preset === 'managed'
+                  ? 'border-violet-300 bg-violet-50 dark:border-violet-700 dark:bg-violet-950/20 shadow-sm'
+                  : 'border-gray-200 dark:border-gray-700 hover:border-violet-200 hover:bg-gray-50 dark:hover:bg-gray-900/40'
+              }`}
+            >
+              <div className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+                <Monitor size={16} className="text-violet-600 dark:text-violet-400" />
+                方案 B：托管浏览器（推荐）
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                显式锁定到 OpenClaw 托管的 <span className="font-mono">openclaw</span> profile，使用独立 user-data-dir，
+                避免把运行行为建立在上游默认值之上。
+              </p>
+              <pre className="mt-2 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/60 p-3 text-[11px] text-gray-700 dark:text-gray-300 overflow-x-auto font-mono">{`{\n  "browser": {\n    "enabled": true,\n    "defaultProfile": "openclaw"\n  }\n}`}</pre>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">启用浏览器控制</label>
+                <code className="text-[9px] text-gray-400 font-mono bg-gray-50 dark:bg-gray-900 px-1.5 py-0.5 rounded border border-gray-100 dark:border-gray-800">browser.enabled</code>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-900/30">
+                <button
+                  onClick={toggleEnabled}
+                  className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-violet-500 ${enabled ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${enabled ? 'translate-x-4' : ''}`} />
+                </button>
+                <span className={`text-xs font-medium ${enabled ? 'text-violet-600 dark:text-violet-400' : 'text-gray-500'}`}>
+                  {enabled ? '已启用' : '已禁用'}
+                </span>
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                关闭后等价于方案 A，并会移除当前显式的 <span className="font-mono">browser.defaultProfile</span>；后续再次开启时，会自动回到更安全的 <span className="font-mono">openclaw</span>。
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">默认浏览器 Profile</label>
+                <code className="text-[9px] text-gray-400 font-mono bg-gray-50 dark:bg-gray-900 px-1.5 py-0.5 rounded border border-gray-100 dark:border-gray-800">browser.defaultProfile</code>
+              </div>
+              <div className="space-y-2">
+                <div className="relative">
+                  <select
+                    value={profileMode === 'custom' ? 'custom' : profileMode}
+                    onChange={e => setProfileMode(e.target.value as Exclude<BrowserProfileMode, 'custom'>)}
+                    disabled={!enabled}
+                    className="w-full px-3.5 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 appearance-none cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {profileMode === 'custom' && (
+                      <option value="custom" disabled>
+                        custom（当前：{effectiveDefaultProfile}）
+                      </option>
+                    )}
+                    <option value="openclaw">openclaw（托管独立 profile）</option>
+                    <option value="chrome">chrome（扩展 relay / 系统 Chromium 标签页）</option>
+                  </select>
+                  <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                </div>
+              </div>
+              {!enabled ? (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                  先开启浏览器控制，再决定默认 profile。若只想要最稳妥方案，直接点击上面的“托管浏览器（推荐）”即可。
+                </p>
+              ) : profileMode === 'openclaw' ? (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                  这就是方案 B：默认使用 OpenClaw 托管浏览器，尽量避免影响系统浏览器的日常个人登录态。
+                </p>
+              ) : profileMode === 'chrome' ? (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+                  <span className="font-semibold">谨慎使用：</span>这会走 Chrome 扩展 relay。只有你手动附加（badge 为 ON）的系统 Chromium 标签页会被控制，但不建议挂在日常个人 profile 上。
+                </p>
+              ) : (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                  当前是自定义 profile：<span className="font-mono">{effectiveDefaultProfile}</span>。本区会保留它，但这里只提供切回内建
+                  <span className="font-mono"> openclaw </span>
+                  或
+                  <span className="font-mono"> chrome </span>
+                  的可视化入口；如需继续维护自定义
+                  <span className="font-mono"> browser.profiles.* </span>
+                  请继续使用高级 JSON / 配置文件。
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CfgNumberInput({
+  value,
+  placeholder,
+  label,
+  integer,
+  min,
+  max,
+  onCommit,
+}: {
+  value: any;
+  placeholder?: string;
+  label: string;
+  integer?: boolean;
+  min?: number;
+  max?: number;
+  onCommit: (next: number | undefined) => void;
+}) {
+  const [draft, setDraft] = useState(value === undefined || value === null ? '' : String(value));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setDraft(value === undefined || value === null ? '' : String(value));
+  }, [focused, value]);
+
+  const commit = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      onCommit(undefined);
+      return;
+    }
+    const parsed = Number(trimmed);
+    const error = validateNumericFieldValue(parsed, { label, integer, min, max });
+    if (Number.isFinite(parsed) && !error) onCommit(parsed);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        setFocused(false);
+        commit(draft);
+      }}
+      onChange={e => {
+        const raw = e.target.value;
+        if (!/^-?(?:\d+)?(?:\.\d*)?$/.test(raw)) return;
+        setDraft(raw);
+        const trimmed = raw.trim();
+        if (!trimmed) {
+          onCommit(undefined);
+          return;
+        }
+        if (trimmed !== '-' && trimmed !== '.' && trimmed !== '-.' && !trimmed.endsWith('.')) {
+          commit(trimmed);
+        }
+      }}
+      placeholder={placeholder}
+      className="w-full px-3.5 py-2.5 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 transition-all placeholder:text-gray-400"
+    />
   );
 }
 
