@@ -201,6 +201,19 @@ const _api = {
   updatePluginConfig: (id: string, config: any) => put(`/plugins/${id}/config`, config),
   getPluginLogs: (id: string) => get(`/plugins/${id}/logs`),
   updatePluginVersion: (id: string) => post(`/plugins/${id}/update`),
+  // Workflow Center
+  getWorkflowSettings: () => get('/workflows/settings'),
+  updateWorkflowSettings: (data: any) => put('/workflows/settings', data),
+  getWorkflowTemplates: () => get('/workflows/templates'),
+  saveWorkflowTemplate: (template: any) => post('/workflows/templates', { template }),
+  deleteWorkflowTemplate: (id: string) => del(`/workflows/templates/${id}`),
+  generateWorkflowTemplate: (prompt: string, category?: string, settings?: any) => postLong('/workflows/templates/generate', { prompt, category, settings }, 120000),
+  getWorkflowRuns: (status?: string) => get(`/workflows/runs${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  getWorkflowRun: (id: string) => get(`/workflows/runs/${id}`),
+  startWorkflowRun: (templateId: string, data?: any) => post(`/workflows/templates/${templateId}/run`, data || {}),
+  controlWorkflowRun: (id: string, action: string, reply?: string) => post(`/workflows/runs/${id}/control`, { action, reply }),
+  resendWorkflowArtifact: (id: string, data: { stepKey?: string; fileName?: string }) => post(`/workflows/runs/${id}/artifacts/resend`, data),
+  deleteWorkflowRun: (id: string) => del(`/workflows/runs/${id}`),
 };
 
 // In demo mode, replace all API calls with mock data
