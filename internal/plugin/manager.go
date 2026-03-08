@@ -246,6 +246,23 @@ func (m *Manager) InstallWithProgress(pluginID string, source string, logf func(
 	}
 
 	if regPlugin == nil && source == "" {
+		if logf != nil {
+			logf("🔄 当前缓存仓库未命中插件，正在刷新插件仓库...")
+		}
+		if fetched, err := m.FetchRegistry(); err == nil && fetched != nil {
+			reg = fetched
+			for i := range reg.Plugins {
+				if reg.Plugins[i].ID == pluginID {
+					regPlugin = &reg.Plugins[i]
+					break
+				}
+			}
+		} else if logf != nil && err != nil {
+			logf(fmt.Sprintf("⚠️ 刷新插件仓库失败，继续使用本地仓库信息: %v", err))
+		}
+	}
+
+	if regPlugin == nil && source == "" {
 		return fmt.Errorf("插件 %s 不在仓库中，请提供安装源", pluginID)
 	}
 

@@ -28,6 +28,9 @@ Go Single Binary · React 18 · TailwindCSS · SQLite · WebSocket Real-time · 
 > This project is for **learning and research purposes only**. **Commercial use is strictly prohibited.** Using third-party clients to log in to QQ/WeChat may violate Tencent's Terms of Service and **carries a risk of account suspension**. Please use test accounts. The author has **not performed any reverse engineering** and only integrates existing open-source projects. **No responsibility is assumed for any consequences.** By downloading and using this project, you agree to the [full disclaimer](DISCLAIMER.md).
 
 > [!NOTE]
+> **v5.2.3 Update** — PR41's Feishu / governance work is now integrated into main, the channel page now uses simplified high-frequency fields for QQ Official Bot / DingTalk / WeCom, and plugin installation now refreshes the registry automatically before reporting “plugin not found”. See [changelogs/v5.2.3.md](changelogs/v5.2.3.md)
+
+> [!NOTE]
 > **v5.0.4 New** — 🔧 NapCat one-click diagnose & repair, system diagnostic report, QR login auto-detect & auto-close, disabled auto-login, container auto-restart after install, PATH detection fix. [View changelog](changelogs/v5.0.4.md)
 
 ## Features

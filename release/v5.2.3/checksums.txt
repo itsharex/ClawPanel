@@ -1,0 +1,6 @@
+6275cfe21077546834387baf9f145ac3a9184d3da855994809ca05ed17db01a1  ClawPanel-Setup-v5.2.3.exe
+26996cd3359c97c6c2fe070f6684c17dceba9cde4cf6eba5f448db6382b55df8  clawpanel-v5.2.3-darwin-amd64
+50228437790c7b985fec92ec05f2d4b940f70782cc31bd92cdd38cedae1c5c80  clawpanel-v5.2.3-darwin-arm64
+5cf57c0e069ef20e8880993e6816a4cca1a2ed71c10d8b059c49b2c8b5d71e64  clawpanel-v5.2.3-linux-amd64
+cbf8d3860df0f38e789d5a604e21fc00e64cf5fb56cca10ec5d14ba2345013f8  clawpanel-v5.2.3-linux-arm64
+b79ed6e7213b6461cb5d1d7b25c9b1bc5311fb016301de260148fc4cb95f65fa  clawpanel-v5.2.3-windows-amd64.exe
