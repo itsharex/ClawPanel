@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Radio, Wifi, WifiOff, QrCode, Key, Zap, UserCheck, Check, X, Power, Loader2, RefreshCw, LogOut, Sparkles, Download, Package, Wrench, Search, Copy, CheckCircle, AlertTriangle, AlertCircle } from 'lucide-react';
 import { useI18n } from '../i18n';
@@ -245,15 +246,24 @@ const CHANNEL_DEFS: ChannelDef[] = [
     ] },
   { id: 'dingtalk', label: '钉钉', description: '钉钉机器人 (插件)', type: 'plugin',
     configFields: [
-      { key: 'appKey', label: 'App Key', type: 'text' },
-      { key: 'appSecret', label: 'App Secret', type: 'password' },
-      { key: 'robotCode', label: 'Robot Code', type: 'text' },
+      { key: 'clientId', label: 'Client ID', type: 'text' },
+      { key: 'clientSecret', label: 'Client Secret', type: 'password' },
     ] },
-  { id: 'wecom', label: '企业微信', description: '企业微信应用消息 (插件)', type: 'plugin',
+  { id: 'wecom', label: '企业微信（智能机器人）', description: '企业微信智能机器人，被动回复、群聊友好', type: 'plugin',
     configFields: [
+      { key: 'webhookPath', label: 'Webhook Path', type: 'text', placeholder: '/wecom' },
+      { key: 'token', label: 'Token', type: 'password' },
+      { key: 'encodingAESKey', label: 'EncodingAESKey', type: 'password', help: '43 位字符' },
+    ] },
+  { id: 'wecom-app', label: '企业微信（自建应用）', description: '企业微信自建应用，支持更完整 API 与微信入口', type: 'plugin',
+    configFields: [
+      { key: 'webhookPath', label: 'Webhook Path', type: 'text', placeholder: '/wecom-app' },
+      { key: 'token', label: 'Token', type: 'password' },
+      { key: 'encodingAESKey', label: 'EncodingAESKey', type: 'password', help: '43 位字符' },
       { key: 'corpId', label: 'Corp ID', type: 'text' },
+      { key: 'corpSecret', label: 'Corp Secret', type: 'password' },
       { key: 'agentId', label: 'Agent ID', type: 'text' },
-      { key: 'secret', label: 'Secret', type: 'password' },
+      { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', placeholder: 'https://qyapi.weixin.qq.com', help: '可选；VPS 代理时可填写' },
     ] },
   { id: 'msteams', label: 'Microsoft Teams', description: 'Bot Framework (插件)', type: 'plugin',
     configFields: [
@@ -283,6 +293,25 @@ const CHANNEL_DEFS: ChannelDef[] = [
     ] },
 ];
 
+const CHANNEL_REQUIRED_FIELDS: Record<string, string[]> = {
+  telegram: ['token'],
+  discord: ['token', 'applicationId'],
+  irc: ['server', 'nick', 'channels'],
+  slack: ['appToken', 'botToken'],
+  signal: ['apiUrl', 'phoneNumber'],
+  googlechat: ['serviceAccountKey', 'webhookUrl'],
+  bluebubbles: ['serverUrl', 'password'],
+  feishu: ['appId', 'appSecret'],
+  qqbot: ['appId', 'clientSecret'],
+  dingtalk: ['clientId', 'clientSecret'],
+  wecom: ['token', 'encodingAESKey'],
+  'wecom-app': ['token', 'encodingAESKey', 'corpId', 'corpSecret', 'agentId'],
+  msteams: ['appId', 'appPassword'],
+  mattermost: ['url', 'token'],
+  line: ['channelAccessToken', 'channelSecret'],
+  matrix: ['homeserverUrl', 'accessToken'],
+  twitch: ['username', 'oauthToken', 'channels'],
+};
 // 飞书双版本：读取当前启用的变体
 function getActiveFeishuVariant(ocConfig: any): 'official' | 'clawteam' | null {
   const entries = ocConfig?.plugins?.entries || {};
@@ -298,6 +327,9 @@ function getFeishuPluginEntryId(ocConfig: any): string {
   return 'feishu';
 }
 
+function isQQPluginInstalled(installedPlugins: any[]) {
+  return installedPlugins.some((p: any) => p.id === 'qq');
+}
 // Determine channel status: 'enabled' (green), 'configured' (red/orange), 'unconfigured' (gray)
 function getChannelStatus(ch: ChannelDef, ocConfig: any): 'enabled' | 'configured' | 'unconfigured' {
   const chConf = ocConfig?.channels?.[ch.id] || {};
@@ -332,6 +364,9 @@ function statusDot(s: 'enabled' | 'configured' | 'unconfigured') {
 
 export default function Channels() {
   const { t } = useI18n();
+  const { uiMode } = (useOutletContext() as { uiMode?: 'modern' }) || {};
+  const modern = uiMode === 'modern';
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const statusLabel = (s: 'enabled' | 'configured' | 'unconfigured') => {
     if (s === 'enabled') return t.channels.statusEnabled;
@@ -375,6 +410,14 @@ export default function Channels() {
   const [loadingFeishuDmDiagnosis, setLoadingFeishuDmDiagnosis] = useState(false);
   const [savingFeishuDmScope, setSavingFeishuDmScope] = useState(false);
   const qrPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const navigate = useNavigate();
+
+  const normalizeChannelQuery = (value: string | null) => {
+    if (!value) return '';
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'napcat') return 'qq';
+    return CHANNEL_DEFS.some(channel => channel.id === normalized) ? normalized : '';
+  };
 
   const syncFeishuUiState = useCallback((config: any) => {
     const feishuCfg = isPlainObject(config?.channels?.feishu) ? config.channels.feishu : {};
@@ -442,7 +485,7 @@ export default function Channels() {
   };
 
   const loadInstalledPlugins = () => {
-    api.getSkills().then((r: any) => { if (r.ok) setInstalledPlugins(r.plugins || []); }).catch(() => {});
+    api.getInstalledPlugins().then((r: any) => { if (r.ok) setInstalledPlugins(r.plugins || []); }).catch(() => {});
   };
 
   const loadFeishuDmDiagnosis = useCallback(async () => {
@@ -467,6 +510,26 @@ export default function Channels() {
     }
     // Check if plugin extension is installed (in extensions dir or plugins.installs)
     return installedPlugins.some((p: any) => p.id === channelId);
+  };
+
+  const validateChannelBeforeEnable = (channelId: string) => {
+    const requiredFields = CHANNEL_REQUIRED_FIELDS[channelId] || [];
+    if (!requiredFields.length) return '';
+    const cfg = ocConfig?.channels?.[channelId] || {};
+    const missingLabels = requiredFields
+      .filter(key => {
+        const value = key.split('.').reduce((obj: any, part: string) => obj?.[part], cfg);
+        return !String(value ?? '').trim();
+      })
+      .map(key => CHANNEL_DEFS.find(ch => ch.id === channelId)?.configFields.find(field => field.key === key)?.label || key);
+    if (missingLabels.length) {
+      const channelLabel = CHANNEL_DEFS.find(ch => ch.id === channelId)?.label || channelId;
+      if (channelId === 'dingtalk') {
+        return '钉钉需要先填写 Client ID 和 Client Secret 才能启用';
+      }
+      return `${channelLabel} 需要先填写：${missingLabels.join('、')}`;
+    }
+    return '';
   };
 
   const reload = () => {
@@ -501,6 +564,26 @@ export default function Channels() {
   useEffect(() => {
     if (selectedChannel === 'feishu') syncFeishuUiState(ocConfig);
   }, [selectedChannel, syncFeishuUiState]);
+  useEffect(() => {
+    const queryChannel = normalizeChannelQuery(searchParams.get('channel'));
+    if (!queryChannel) return;
+    setSelectedChannel(prev => prev === queryChannel ? prev : queryChannel);
+  }, [searchParams]);
+  // 自动选择第一个已启用的渠道（而非硬编码 QQ）
+  useEffect(() => {
+    const queryChannel = normalizeChannelQuery(searchParams.get('channel'));
+    if (queryChannel || selectedChannel) return;
+    const firstEnabled = CHANNEL_DEFS.find(ch => {
+      const chConf = ocConfig?.channels?.[ch.id] || {};
+      const pluginConf = ocConfig?.plugins?.entries?.[ch.id] || {};
+      if (ch.id === 'feishu') {
+        return chConf.enabled || pluginConf.enabled || ocConfig?.plugins?.entries?.['feishu-openclaw-plugin']?.enabled;
+      }
+      return chConf.enabled || pluginConf.enabled;
+    });
+    if (firstEnabled) setSelectedChannel(firstEnabled.id);
+    else setSelectedChannel('feishu');
+  }, [ocConfig, selectedChannel]);
   useEffect(() => {
     const timer = setInterval(loadNapcatStatus, 30000);
     return () => clearInterval(timer);
@@ -704,8 +787,23 @@ export default function Channels() {
 
   const currentDef = CHANNEL_DEFS.find(c => c.id === selectedChannel);
 
+  const syncSelectedChannel = (channelId: string) => {
+    setSelectedChannel(channelId);
+    const next = new URLSearchParams(searchParams);
+    next.set('channel', channelId);
+    setSearchParams(next, { replace: true });
+  };
+
   const handleToggleEnabled = async (channelId: string) => {
     const newEnabled = !isChannelEnabled(channelId);
+    if (newEnabled) {
+      const validationError = validateChannelBeforeEnable(channelId);
+      if (validationError) {
+        setMsg(`❌ ${validationError}`);
+        setTimeout(() => setMsg(''), 5000);
+        return;
+      }
+    }
     try {
       const r = await api.toggleChannel(channelId, newEnabled);
       if (r.ok) {
@@ -730,7 +828,8 @@ export default function Channels() {
       if (currentDef.id === 'feishu' && String(chData.groupPolicy || '').trim() !== 'allowlist') {
         delete chData.groupAllowFrom;
       }
-      await api.updateChannel(currentDef.id, chData);
+      const r = await api.updateChannel(currentDef.id, chData);
+      if (!r.ok) throw new Error(r.error || t.channels.saveFailed);
       // 飞书特殊处理：保存时操作当前活跃变体的 plugin entry
       if (currentDef.id === 'feishu') {
         const entryId = getFeishuPluginEntryId(ocConfig);
@@ -738,9 +837,9 @@ export default function Channels() {
       } else if (currentDef.type === 'plugin') {
         await api.updatePlugin(currentDef.id, { enabled: enabledState });
       }
-      setMsg(t.channels.saveSuccess);
+      setMsg(r.message || t.channels.saveSuccess);
       reload();
-      setTimeout(() => setMsg(''), 2000);
+      setTimeout(() => setMsg(''), 5000);
     } catch (err) { setMsg(t.channels.saveFailed + ': ' + String(err)); }
     finally { setSaving(false); }
   };
@@ -1108,10 +1207,10 @@ export default function Channels() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className={`space-y-4 ${modern ? 'page-modern' : ''}`}>
       <div>
-        <h2 className="text-lg font-bold">{t.channels.title}</h2>
-        <p className="text-xs text-gray-500 mt-0.5">{t.channels.subtitle} — <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />{t.channels.statusEnabled}</span> <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-400 inline-block" />{t.channels.statusConfigured}</span> <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-gray-300 inline-block" />{t.channels.statusUnconfigured}</span></p>
+        <h2 className={`${modern ? 'page-modern-title text-xl' : 'text-lg font-bold'}`}>{t.channels.title}</h2>
+        <p className={`${modern ? 'page-modern-subtitle text-xs mt-0.5' : 'text-xs text-gray-500 mt-0.5'}`}>{t.channels.subtitle} — <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />{t.channels.statusEnabled}</span> <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-400 inline-block" />{t.channels.statusConfigured}</span> <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-gray-300 inline-block" />{t.channels.statusUnconfigured}</span></p>
       </div>
 
       {msg && (
@@ -1133,13 +1232,13 @@ export default function Channels() {
                 {sortedBuiltin.map(ch => {
                   const st = getChannelStatus(ch, ocConfig);
                   return (
-                    <button key={ch.id} onClick={() => setSelectedChannel(ch.id)}
+                    <button key={ch.id} onClick={() => syncSelectedChannel(ch.id)}
                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-all duration-200 group ${
                         selectedChannel === ch.id
-                          ? 'bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300 shadow-sm ring-1 ring-violet-100 dark:ring-violet-800'
-                          : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                          ? 'border border-blue-100/80 bg-[linear-gradient(135deg,rgba(37,99,235,0.12),rgba(14,165,233,0.08))] dark:bg-[linear-gradient(135deg,rgba(37,99,235,0.2),rgba(14,165,233,0.12))] dark:border-blue-800/40 text-blue-700 dark:text-blue-300 shadow-sm'
+                          : 'text-gray-600 dark:text-gray-400 hover:bg-white/70 dark:hover:bg-gray-700/50 hover:border-blue-100/70'
                       }`}>
-                      <div className={`p-1.5 rounded-md transition-colors ${selectedChannel === ch.id ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600' : 'bg-gray-100 dark:bg-gray-700 text-gray-500 group-hover:bg-white group-hover:shadow-sm'}`}>
+                      <div className={`p-1.5 rounded-xl transition-colors border ${selectedChannel === ch.id ? 'bg-blue-50/90 dark:bg-blue-900/30 border-blue-100 dark:border-blue-800/40 text-blue-600' : 'bg-gray-100 dark:bg-gray-700 border-transparent text-gray-500 group-hover:bg-white group-hover:border-blue-100/70 group-hover:shadow-sm'}`}>
                         <Radio size={14} />
                       </div>
                       <div className="min-w-0 flex-1">
@@ -1160,13 +1259,13 @@ export default function Channels() {
                   {sortedPlugin.map(ch => {
                     const st = getChannelStatus(ch, ocConfig);
                     return (
-                      <button key={ch.id} onClick={() => setSelectedChannel(ch.id)}
+                      <button key={ch.id} onClick={() => syncSelectedChannel(ch.id)}
                         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-all duration-200 group ${
                           selectedChannel === ch.id
-                            ? 'bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300 shadow-sm ring-1 ring-violet-100 dark:ring-violet-800'
-                            : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                            ? 'border border-blue-100/80 bg-[linear-gradient(135deg,rgba(37,99,235,0.12),rgba(14,165,233,0.08))] dark:bg-[linear-gradient(135deg,rgba(37,99,235,0.2),rgba(14,165,233,0.12))] dark:border-blue-800/40 text-blue-700 dark:text-blue-300 shadow-sm'
+                            : 'text-gray-600 dark:text-gray-400 hover:bg-white/70 dark:hover:bg-gray-700/50 hover:border-blue-100/70'
                         }`}>
-                        <div className={`p-1.5 rounded-md transition-colors ${selectedChannel === ch.id ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600' : 'bg-gray-100 dark:bg-gray-700 text-gray-500 group-hover:bg-white group-hover:shadow-sm'}`}>
+                        <div className={`p-1.5 rounded-xl transition-colors border ${selectedChannel === ch.id ? 'bg-blue-50/90 dark:bg-blue-900/30 border-blue-100 dark:border-blue-800/40 text-blue-600' : 'bg-gray-100 dark:bg-gray-700 border-transparent text-gray-500 group-hover:bg-white group-hover:border-blue-100/70 group-hover:shadow-sm'}`}>
                           <Radio size={14} />
                         </div>
                         <div className="min-w-0 flex-1">
@@ -1185,8 +1284,37 @@ export default function Channels() {
 
         {/* Channel config */}
         <div className="lg:col-span-3 space-y-6">
+          {/* QQ plugin not installed overlay */}
+          {currentDef && currentDef.id === 'qq' && !isQQPluginInstalled(installedPlugins) && (
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-8 text-center space-y-4">
+              <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center">
+                <AlertTriangle size={32} className="text-amber-500" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white">QQ 个人号插件未安装</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  安装 QQ (NapCat) 前会先安装 QQ 个人号插件。当前未检测到插件，请重新执行 NapCat 安装；若仍失败，请检查加速源或手动前往插件中心安装 `qq` 插件。
+                </p>
+              </div>
+              <div className="flex items-center justify-center gap-3 flex-wrap">
+                <button
+                  onClick={() => handleInstallContainer('napcat')}
+                  disabled={installingSw !== null}
+                  className={`${modern ? 'page-modern-accent px-6 py-3 text-sm' : 'inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl'}`}
+                >
+                  {installingSw ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                  {installingSw ? '安装中...' : '重新安装 QQ (NapCat)'}
+                </button>
+                <button onClick={() => navigate('/plugins')} className={`${modern ? 'page-modern-action px-6 py-3 text-sm' : 'inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-600 transition-all'}`}>
+                  <Package size={16} />
+                  前往插件中心
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* QQ NapCat not installed overlay */}
-          {currentDef && currentDef.id === 'qq' && !isContainerInstalled('napcat') && softwareList.length > 0 && (
+          {currentDef && currentDef.id === 'qq' && isQQPluginInstalled(installedPlugins) && !isContainerInstalled('napcat') && softwareList.length > 0 && (
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-8 text-center space-y-4">
               <div className="w-16 h-16 mx-auto rounded-2xl bg-gray-100 dark:bg-gray-700 flex items-center justify-center">
                 <Package size={32} className="text-gray-400" />
@@ -1203,7 +1331,7 @@ export default function Channels() {
                 <button
                   onClick={() => handleInstallContainer('napcat')}
                   disabled={installingSw !== null}
-                  className="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl"
+                  className={`${modern ? 'page-modern-accent px-6 py-3 text-sm' : 'inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl'}`}
                 >
                   {installingSw ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                   {installingSw ? '安装中...' : '一键安装 NapCat Shell'}
@@ -1216,13 +1344,13 @@ export default function Channels() {
                 <button
                   onClick={() => handleInstallContainer('napcat')}
                   disabled={installingSw !== null}
-                  className="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl"
+                  className={`${modern ? 'page-modern-accent px-6 py-3 text-sm' : 'inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl'}`}
                 >
                   {installingSw ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                   {installingSw ? '安装中...' : '一键安装 NapCat Docker'}
                 </button>
               )}
-              <p className="text-[11px] text-gray-400">安装进度可在左下角「消息中心」实时查看</p>
+              <p className="text-[11px] text-gray-400">安装进度可在右上角铃铛中的消息中心实时查看</p>
             </div>
           )}
 
@@ -1238,15 +1366,15 @@ export default function Channels() {
                   需要先安装 {currentDef.label} 插件才能配置此通道。请前往「插件中心」安装。
                 </p>
               </div>
-              <a href="#/plugins" className="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl">
+              <button onClick={() => navigate('/plugins')} className={`${modern ? 'page-modern-accent px-6 py-3 text-sm' : 'inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl'}`}>
                 <Download size={16} />
                 前往插件中心安装
-              </a>
+              </button>
             </div>
           )}
 
           {currentDef && !(
-            (currentDef.id === 'qq' && !isContainerInstalled('napcat') && softwareList.length > 0) ||
+            (currentDef.id === 'qq' && (!isQQPluginInstalled(installedPlugins) || (!isContainerInstalled('napcat') && softwareList.length > 0))) ||
             (currentDef.type === 'plugin' && currentDef.id !== 'qq' && !isPluginInstalled(currentDef.id))
           ) && (
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 p-6 space-y-6">
@@ -1273,8 +1401,8 @@ export default function Channels() {
                     <span className={`text-[11px] font-medium ${isChannelEnabled(currentDef.id) ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400'}`}>
                       {isChannelEnabled(currentDef.id) ? t.channels.enabledState : t.channels.disabledState}
                     </span>
-                    <button onClick={() => handleToggleEnabled(currentDef.id)}
-                      className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-violet-500 ${isChannelEnabled(currentDef.id) ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
+                      <button onClick={() => handleToggleEnabled(currentDef.id)}
+                        className={`relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-violet-500 ${isChannelEnabled(currentDef.id) ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
                       <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${isChannelEnabled(currentDef.id) ? 'translate-x-4' : ''}`} />
                     </button>
                   </div>
@@ -1282,26 +1410,26 @@ export default function Channels() {
                   {currentDef.loginMethods && currentDef.loginMethods.length > 0 && (
                     <div className="flex items-center gap-2 border-l border-gray-200 dark:border-gray-700 pl-3 ml-1">
                       {currentDef.loginMethods.includes('qrcode') && (
-                        <button onClick={handleQRLogin} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors">
+                        <button onClick={handleQRLogin} className={`${modern ? 'page-modern-accent px-3 py-1.5 text-xs' : 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors'}`}>
                           <QrCode size={14} />{t.channels.qrLogin}
                         </button>
                       )}
                       {currentDef.loginMethods.includes('quick') && (
-                        <button onClick={handleQuickLoginOpen} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors">
+                        <button onClick={handleQuickLoginOpen} className={`${modern ? 'page-modern-success px-3 py-1.5 text-xs' : 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors'}`}>
                           <Zap size={14} />{t.channels.quickLogin}
                         </button>
                       )}
                       {currentDef.loginMethods.includes('password') && (
-                        <button onClick={handlePasswordLoginOpen} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors">
+                        <button onClick={handlePasswordLoginOpen} className={`${modern ? 'page-modern-warn px-3 py-1.5 text-xs' : 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors'}`}>
                           <Key size={14} />{t.channels.passwordLogin}
                         </button>
                       )}
                       {currentDef.id === 'qq' && (
                         <>
-                          <button onClick={handleQQLogout} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors">
+                          <button onClick={handleQQLogout} className={`${modern ? 'page-modern-danger px-3 py-1.5 text-xs' : 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors'}`}>
                             <LogOut size={14} />{t.channels.logoutQQ}
                           </button>
-                          <button onClick={handleRestartNapcat} disabled={restarting} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 hover:bg-orange-100 dark:hover:bg-orange-900/50 disabled:opacity-50 transition-colors">
+                          <button onClick={handleRestartNapcat} disabled={restarting} className={`${modern ? 'page-modern-warn px-3 py-1.5 text-xs' : 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 hover:bg-orange-100 dark:hover:bg-orange-900/50 disabled:opacity-50 transition-colors'}`}>
                             {restarting ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                             {restarting ? '重启中...' : '重启NapCat'}
                           </button>
@@ -1351,7 +1479,7 @@ export default function Channels() {
                       )}
                       {(napcatStatus.status === 'offline' || napcatStatus.status === 'stopped') && (
                         <button onClick={handleReconnect} disabled={reconnecting}
-                          className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-lg bg-violet-50 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 hover:bg-violet-100 dark:hover:bg-violet-900/50 disabled:opacity-50 transition-colors">
+                          className={`${modern ? 'page-modern-accent px-2.5 py-1 text-[11px]' : 'flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-lg bg-violet-50 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 hover:bg-violet-100 dark:hover:bg-violet-900/50 disabled:opacity-50 transition-colors'}`}>
                           <RefreshCw size={11} className={reconnecting ? 'animate-spin' : ''} />
                           {reconnecting ? '重连中...' : '手动重连'}
                         </button>
@@ -1393,13 +1521,13 @@ export default function Channels() {
                       <span className="text-sm font-bold text-gray-900 dark:text-white">NapCat 诊断修复</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => handleDiagnose(false)} disabled={diagnosing}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50 transition-colors">
+                       <button onClick={() => handleDiagnose(false)} disabled={diagnosing}
+                         className={`${modern ? 'page-modern-action px-3 py-1.5 text-xs' : 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50 transition-colors'}`}>
                         {diagnosing ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />}
                         {diagnosing ? '诊断中...' : '检测状态'}
                       </button>
-                      <button onClick={() => handleDiagnose(true)} disabled={diagnosing}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all shadow-sm">
+                       <button onClick={() => handleDiagnose(true)} disabled={diagnosing}
+                         className={`${modern ? 'page-modern-accent px-3 py-1.5 text-xs' : 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all shadow-sm'}`}>
                         {diagnosing ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />}
                         {diagnosing ? '修复中...' : '诊断并修复'}
                       </button>
@@ -1844,7 +1972,7 @@ export default function Channels() {
 
               <div className="flex items-center justify-end pt-4 border-t border-gray-50 dark:border-gray-800">
                 <button onClick={handleSave} disabled={saving}
-                  className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 shadow-sm shadow-violet-200 dark:shadow-none transition-all hover:shadow-md hover:shadow-violet-200 dark:hover:shadow-none">
+                  className={`${modern ? 'page-modern-accent px-5 py-2.5 text-sm' : 'flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 shadow-sm shadow-violet-200 dark:shadow-none transition-all hover:shadow-md hover:shadow-violet-200 dark:hover:shadow-none'}`}>
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
                   {saving ? t.channels.saving : t.channels.saveConfig}
                 </button>
@@ -1875,10 +2003,10 @@ export default function Channels() {
                       {r.comment && <div className="text-gray-500 text-xs truncate">{t.channels.comment}: "{r.comment}"</div>}
                     </div>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => handleApprove(r.flag)} className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors" title={t.channels.approve}>
+                      <button onClick={() => handleApprove(r.flag)} className={`${modern ? 'page-modern-success p-2' : 'p-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors'}`} title={t.channels.approve}>
                         <Check size={16} />
                       </button>
-                      <button onClick={() => handleReject(r.flag)} className="p-2 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors" title={t.channels.reject}>
+                      <button onClick={() => handleReject(r.flag)} className={`${modern ? 'page-modern-danger p-2' : 'p-2 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors'}`} title={t.channels.reject}>
                         <X size={16} />
                       </button>
                     </div>
@@ -1900,7 +2028,7 @@ export default function Channels() {
                 {loginModal === 'quick' && <><Zap size={18} className="text-emerald-500" /> QQ {t.channels.quickLogin}</>}
                 {loginModal === 'password' && <><Key size={18} className="text-amber-500" /> QQ {t.channels.passwordLogin}</>}
               </h3>
-              <button onClick={() => setLoginModal(null)} className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+              <button onClick={() => setLoginModal(null)} className={`${modern ? 'page-modern-action p-1.5' : 'p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors'}`}>
                 <X size={18} />
               </button>
             </div>
@@ -1928,7 +2056,7 @@ export default function Channels() {
                   )}
                   <p className="text-xs text-gray-500">{t.channels.scanQR}</p>
                   <button onClick={handleRefreshQR} disabled={qrLoading}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+                    className={`${modern ? 'page-modern-accent px-3 py-1.5 text-xs' : 'flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50'}`}>
                     <RefreshCw size={12} className={qrLoading ? 'animate-spin' : ''} />{t.channels.refreshQR}
                   </button>
                 </div>
@@ -1946,7 +2074,7 @@ export default function Channels() {
                       <p className="text-xs text-gray-500">{t.channels.selectQuickAccount}</p>
                       {quickList.map(uin => (
                         <button key={uin} onClick={() => handleQuickLogin(uin)}
-                          className="w-full flex items-center gap-3 px-4 py-3 rounded-lg bg-gray-50 dark:bg-gray-800 hover:bg-emerald-50 dark:hover:bg-emerald-950 text-sm transition-colors">
+                          className={`${modern ? 'w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-emerald-100/70 bg-[linear-gradient(135deg,rgba(16,185,129,0.08),rgba(255,255,255,0.72))] dark:bg-[linear-gradient(135deg,rgba(16,185,129,0.16),rgba(15,23,42,0.8))] dark:border-emerald-800/30 text-sm transition-all hover:shadow-sm hover:border-emerald-200/80' : 'w-full flex items-center gap-3 px-4 py-3 rounded-lg bg-gray-50 dark:bg-gray-800 hover:bg-emerald-50 dark:hover:bg-emerald-950 text-sm transition-colors'}`}>
                           <Zap size={14} className="text-emerald-500" />
                           <span className="font-mono">{uin}</span>
                         </button>
@@ -1970,7 +2098,7 @@ export default function Channels() {
                       placeholder={t.channels.passwordPlaceholder} className="w-full px-3 py-2 text-xs border border-gray-200 dark:border-gray-700 rounded-lg bg-transparent" />
                   </div>
                   <button onClick={handlePasswordLogin} disabled={loginLoading || !loginUin || !loginPwd}
-                    className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50">
+                    className={`${modern ? 'page-modern-warn w-full px-3 py-2 text-xs' : 'w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50'}`}>
                     {loginLoading ? <Loader2 size={12} className="animate-spin" /> : <Key size={12} />}
                     {loginLoading ? t.login.loggingIn : t.login.loginButton}
                   </button>
