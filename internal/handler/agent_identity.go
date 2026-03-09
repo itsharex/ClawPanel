@@ -26,12 +26,6 @@ var agentAvatarMimeByExt = map[string]string{
 	".webp": "image/webp",
 	".svg":  "image/svg+xml",
 }
-var agentIdentityAllowedKeys = map[string]struct{}{
-	"name":   {},
-	"theme":  {},
-	"emoji":  {},
-	"avatar": {},
-}
 var agentIdentityLegacyThemeKeys = []string{"description", "vibe", "tone", "creature"}
 
 func trimStringField(v interface{}) string {
@@ -92,7 +86,7 @@ func resolveAgentIdentityRealCandidatePath(workspaceRoot, relativePath string) (
 	return candidate, candidate
 }
 
-func cleanAgentIdentityConfig(agent map[string]interface{}) map[string]interface{} {
+func normalizeAgentIdentityConfig(agent map[string]interface{}) map[string]interface{} {
 	if agent == nil {
 		return nil
 	}
@@ -112,32 +106,39 @@ func cleanAgentIdentityConfig(agent map[string]interface{}) map[string]interface
 			}
 		}
 	}
-	cleaned := map[string]interface{}{}
-	for key := range agentIdentityAllowedKeys {
-		if value := trimStringField(identity[key]); value != "" {
-			cleaned[key] = value
+	for key, rawValue := range identity {
+		if text, ok := rawValue.(string); ok {
+			trimmed := strings.TrimSpace(text)
+			if trimmed == "" {
+				delete(identity, key)
+				continue
+			}
+			identity[key] = trimmed
 		}
 	}
-	if len(cleaned) == 0 {
+	if len(identity) == 0 {
 		delete(agent, "identity")
 		return nil
 	}
-	agent["identity"] = cleaned
-	return cleaned
+	agent["identity"] = identity
+	return identity
 }
 
-func validateAgentIdentityConfig(cfg *config.Config, agentID string, agent map[string]interface{}) error {
+func validateAgentIdentityConfig(cfg *config.Config, agentID string, agent map[string]interface{}, strictAvatar bool) error {
 	if rawIdentity, ok := agent["identity"]; ok && rawIdentity != nil {
 		if _, ok := rawIdentity.(map[string]interface{}); !ok {
 			return fmt.Errorf("identity 必须是对象")
 		}
 	}
-	identity := cleanAgentIdentityConfig(agent)
+	identity := normalizeAgentIdentityConfig(agent)
 	if identity == nil {
 		return nil
 	}
 	avatar := trimStringField(identity["avatar"])
 	if avatar == "" {
+		return nil
+	}
+	if !strictAvatar {
 		return nil
 	}
 	if isAgentAvatarDataURL(avatar) || isAgentAvatarHTTPURL(avatar) {

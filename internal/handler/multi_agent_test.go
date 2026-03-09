@@ -1350,6 +1350,122 @@ func TestUpdateOpenClawAgentAllowsClearingSandboxOverrideWithNull(t *testing.T) 
 	}
 }
 
+func TestUpdateOpenClawAgentAllowsUnchangedLegacyAvatar(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"default": "main",
+			"list": []interface{}{
+				map[string]interface{}{"id": "main", "default": true},
+				map[string]interface{}{
+					"id":   "work",
+					"name": "Work",
+					"identity": map[string]interface{}{
+						"avatar": "/legacy/avatar.png",
+					},
+				},
+			},
+		},
+	})
+
+	r := gin.New()
+	r.PUT("/openclaw/agents/:id", UpdateOpenClawAgent(cfg))
+	req := httptest.NewRequest(http.MethodPut, "/openclaw/agents/work", bytes.NewReader([]byte(`{"name":"Renamed Work"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for unchanged legacy avatar, got %d: %s", w.Code, w.Body.String())
+	}
+
+	saved, err := cfg.ReadOpenClawJSON()
+	if err != nil {
+		t.Fatalf("read openclaw.json: %v", err)
+	}
+	agents, _ := saved["agents"].(map[string]interface{})
+	list, _ := agents["list"].([]interface{})
+	var workItem map[string]interface{}
+	for _, raw := range list {
+		item, _ := raw.(map[string]interface{})
+		if strings.TrimSpace(getString(item, "id")) == "work" {
+			workItem = item
+			break
+		}
+	}
+	if got := strings.TrimSpace(getString(workItem, "name")); got != "Renamed Work" {
+		t.Fatalf("expected name update to be saved, got %q", got)
+	}
+	identity, _ := workItem["identity"].(map[string]interface{})
+	if got := strings.TrimSpace(getString(identity, "avatar")); got != "/legacy/avatar.png" {
+		t.Fatalf("expected legacy avatar to be preserved, got %q", got)
+	}
+}
+
+func TestUpdateOpenClawAgentPreservesLegacyIdentityFields(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"default": "main",
+			"list": []interface{}{
+				map[string]interface{}{"id": "main", "default": true},
+				map[string]interface{}{
+					"id":   "work",
+					"name": "Work",
+					"identity": map[string]interface{}{
+						"description": "friendly crab",
+						"customKey":   "kept",
+					},
+				},
+			},
+		},
+	})
+
+	r := gin.New()
+	r.PUT("/openclaw/agents/:id", UpdateOpenClawAgent(cfg))
+	req := httptest.NewRequest(http.MethodPut, "/openclaw/agents/work", bytes.NewReader([]byte(`{"name":"Renamed Work"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 when updating agent with legacy identity fields, got %d: %s", w.Code, w.Body.String())
+	}
+
+	saved, err := cfg.ReadOpenClawJSON()
+	if err != nil {
+		t.Fatalf("read openclaw.json: %v", err)
+	}
+	agents, _ := saved["agents"].(map[string]interface{})
+	list, _ := agents["list"].([]interface{})
+	var workItem map[string]interface{}
+	for _, raw := range list {
+		item, _ := raw.(map[string]interface{})
+		if strings.TrimSpace(getString(item, "id")) == "work" {
+			workItem = item
+			break
+		}
+	}
+	identity, _ := workItem["identity"].(map[string]interface{})
+	if got := strings.TrimSpace(getString(identity, "description")); got != "friendly crab" {
+		t.Fatalf("expected description to survive update, got %q", got)
+	}
+	if got := strings.TrimSpace(getString(identity, "customKey")); got != "kept" {
+		t.Fatalf("expected custom identity key to survive update, got %q", got)
+	}
+	if got := strings.TrimSpace(getString(identity, "theme")); got != "friendly crab" {
+		t.Fatalf("expected theme to be backfilled from legacy description, got %q", got)
+	}
+}
+
 func TestUpdateOpenClawAgentRejectsInvalidContextConfig(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
@@ -3051,6 +3167,102 @@ func TestSaveBindingsPreservesLegacyMatchFields(t *testing.T) {
 	}
 	if got := strings.TrimSpace(toString(match["parentPeer"])); got != "thread:release-notes" {
 		t.Fatalf("expected parentPeer string to be preserved, got %#v", match["parentPeer"])
+	}
+}
+
+func TestGetBindingsPromotesLegacyNameAlias(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"default": "main",
+			"list": []interface{}{
+				map[string]interface{}{"id": "main"},
+			},
+		},
+		"bindings": []interface{}{
+			map[string]interface{}{
+				"agentId": "main",
+				"name":    "Legacy Label",
+				"match": map[string]interface{}{
+					"channel": "qq",
+				},
+			},
+		},
+	})
+
+	r := gin.New()
+	r.GET("/openclaw/bindings", GetOpenClawBindings(cfg))
+	req := httptest.NewRequest(http.MethodGet, "/openclaw/bindings", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		OK       bool                     `json:"ok"`
+		Bindings []map[string]interface{} `json:"bindings"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Bindings) != 1 {
+		t.Fatalf("expected one binding, got %#v", resp.Bindings)
+	}
+	if got := strings.TrimSpace(getString(resp.Bindings[0], "comment")); got != "Legacy Label" {
+		t.Fatalf("expected legacy name alias to surface as comment, got %q", got)
+	}
+	if _, ok := resp.Bindings[0]["name"]; ok {
+		t.Fatalf("expected legacy name key to be normalized away in API response, got %#v", resp.Bindings[0]["name"])
+	}
+}
+
+func TestSaveBindingsAcceptsLegacyNameAlias(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"default": "main",
+			"list": []interface{}{
+				map[string]interface{}{"id": "main"},
+			},
+		},
+	})
+
+	r := gin.New()
+	r.PUT("/openclaw/bindings", SaveOpenClawBindings(cfg))
+	body := []byte(`{"bindings":[{"agentId":"main","name":"Legacy Label","match":{"channel":"qq"}}]}`)
+	req := httptest.NewRequest(http.MethodPut, "/openclaw/bindings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	saved, err := cfg.ReadOpenClawJSON()
+	if err != nil {
+		t.Fatalf("read openclaw.json: %v", err)
+	}
+	bindings, _ := saved["bindings"].([]interface{})
+	if len(bindings) != 1 {
+		t.Fatalf("expected one saved binding, got %#v", saved["bindings"])
+	}
+	binding, _ := bindings[0].(map[string]interface{})
+	if got := strings.TrimSpace(getString(binding, "comment")); got != "Legacy Label" {
+		t.Fatalf("expected legacy name alias to be written as comment, got %q", got)
+	}
+	if _, ok := binding["name"]; ok {
+		t.Fatalf("expected saved binding to drop legacy name key, got %#v", binding["name"])
 	}
 }
 

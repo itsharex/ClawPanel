@@ -198,7 +198,11 @@ func normalizeBindingTopLevel(binding map[string]interface{}) {
 	} else {
 		delete(binding, "type")
 	}
-	if comment := trimScalarString(binding["comment"]); comment != "" {
+	comment := trimScalarString(binding["comment"])
+	if comment == "" {
+		comment = trimScalarString(binding["name"])
+	}
+	if comment != "" {
 		binding["comment"] = comment
 	} else {
 		delete(binding, "comment")

@@ -1560,11 +1560,25 @@ export default function Agents() {
   const selectedAgentIsDefault = selectedAgent?.id === defaultAgent;
   const previewExplanation = useMemo(() => buildPreviewExplanation(previewResult, bindings, defaultAgent), [previewResult, bindings, defaultAgent]);
   const effectiveIsDefault = firstExplicitAgentWillBecomeDefault ? true : form.isDefault;
+  const editingBaseAgent = useMemo(() => {
+    const targetID = (editingId || form.id || '').trim();
+    if (!targetID) return undefined;
+    return agents.find(agent => agent.id === targetID);
+  }, [agents, editingId, form.id]);
   const selectedAvatarPreview = useMemo(() => {
     const avatar = extractIdentityDraft(selectedAgent?.identity).avatar;
     return resolveAvatarPreviewSrc(selectedAgent?.id, avatar);
   }, [selectedAgent]);
-  const formAvatarValidationError = useMemo(() => validateAvatarValue(form.identityAvatar), [form.identityAvatar]);
+  const avatarNeedsStrictValidation = useMemo(() => {
+    const currentAvatar = extractIdentityDraft(editingBaseAgent?.identity).avatar.trim();
+    const nextAvatar = form.identityAvatar.trim();
+    if (!editingBaseAgent) return nextAvatar !== '';
+    return nextAvatar !== currentAvatar;
+  }, [editingBaseAgent, form.identityAvatar]);
+  const formAvatarValidationError = useMemo(() => {
+    if (!avatarNeedsStrictValidation) return '';
+    return validateAvatarValue(form.identityAvatar);
+  }, [avatarNeedsStrictValidation, form.identityAvatar]);
   const formAvatarPreview = useMemo(() => {
     const agentId = (editingId || form.id || '').trim();
     return resolveAvatarPreviewSrc(agentId || undefined, form.identityAvatar);
@@ -2084,10 +2098,6 @@ export default function Agents() {
           throw new Error('identity JSON 必须是对象才能与结构化字段合并');
         }
         const nextIdentity = isPlainObject(identityObj) ? deepClone(identityObj) : {};
-        delete nextIdentity.description;
-        delete nextIdentity.tone;
-        delete nextIdentity.vibe;
-        delete nextIdentity.creature;
         if (form.identityName.trim()) nextIdentity.name = form.identityName.trim();
         else delete nextIdentity.name;
         if (form.identityTheme.trim()) nextIdentity.theme = form.identityTheme.trim();
@@ -4376,7 +4386,7 @@ export default function Agents() {
                         {formAvatarValidationError ? (
                           <p className="mt-1 text-[11px] text-red-600">{formAvatarValidationError}</p>
                         ) : (
-                          <p className="mt-1 text-[11px] text-gray-500">允许 http(s)、data:image/... / data: 以及工作区相对路径；不支持 ~、绝对路径和 file:// / ftp:// 等非 http(s) 协议。</p>
+                          <p className="mt-1 text-[11px] text-gray-500">允许 http(s)、data:image/... / data: 以及工作区相对路径；不支持 ~、绝对路径和 file:// / ftp:// 等非 http(s) 协议。旧 avatar 若未修改，可继续原样保留。</p>
                         )}
                       </div>
                       <div className="md:col-span-2">

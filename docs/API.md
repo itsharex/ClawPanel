@@ -231,6 +231,8 @@ Authorization: Bearer <token>
 > v5.1.0+：保存时会校验：
 > - `agent.contextTokens` 必须为正整数
 > - `agent.compaction.maxHistoryShare` 必须位于 `0..1`
+> - 更新 Agent 时会保留未修改的 legacy `identity.avatar` 写法；若显式修改 avatar，仍按当前规则校验
+> - `identity` 采用非破坏性规范化：legacy `description/vibe/tone/creature` 与自定义字段会继续保留
 
 ### PUT `/api/openclaw/agents/:id`
 更新指定 Agent（`id` 不可修改）。
@@ -298,6 +300,7 @@ Authorization: Bearer <token>
 > - 旧写法（例如 `peer: "group:*"`、`sender`、`parentPeer`）保存时会继续保留，避免升级后把历史 bindings 改坏
 > - top-level 公开字段为 `type`（`route`/`acp`）、`comment`、`agentId`、`acp`
 > - 旧字段 `agent` 仍会在保存时被标准化为 `agentId`
+> - 旧字段 `name` 会作为 `comment` 别名兼容读取；重新保存时统一写成 `comment`
 
 ### POST `/api/openclaw/route/preview`
 路由预览。根据 `meta` 返回命中 Agent、命中规则和 trace。

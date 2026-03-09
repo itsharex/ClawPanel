@@ -38,7 +38,7 @@ OpenClaw 实际运行时仍会结合模型真实 `contextWindow` 取更小值。
 sender > peer > parentPeer > guildId+roles > guildId > teamId > accountId > accountId:* > channel > default
 ```
 
-> 说明：`sender` / `parentPeer` 与字符串 `peer`（例如 `group:*`）属于历史兼容语法；当前面板会继续预览和保留这些写法，避免老 bindings 在编辑后被改坏。
+> 说明：`sender` / `parentPeer` 与字符串 `peer`（例如 `group:*`）属于历史兼容语法；当前面板会继续预览和保留这些写法，避免老 bindings 在编辑后被改坏。旧 top-level `name` 也会作为 `comment` 别名继续兼容。
 
 ## 3. `session.dmScope`：私聊隔离的主开关
 

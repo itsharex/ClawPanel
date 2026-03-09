@@ -154,7 +154,7 @@ func CreateOpenClawAgent(cfg *config.Config) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 				return
 			}
-			if err := validateAgentIdentityConfig(cfg, id, merged); err != nil {
+			if err := validateAgentIdentityConfig(cfg, id, merged, true); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 				return
 			}
@@ -170,7 +170,7 @@ func CreateOpenClawAgent(cfg *config.Config) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 				return
 			}
-			if err := validateAgentIdentityConfig(cfg, id, newItem); err != nil {
+			if err := validateAgentIdentityConfig(cfg, id, newItem, true); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 				return
 			}
@@ -256,7 +256,7 @@ func UpdateOpenClawAgent(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
-		if err := validateAgentIdentityConfig(cfg, id, merged); err != nil {
+		if err := validateAgentIdentityConfig(cfg, id, merged, shouldStrictValidateAgentAvatar(list[idx], payload)); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
@@ -839,6 +839,35 @@ func validateAgentID(id string) error {
 		return fmt.Errorf("agent id 仅支持字母数字下划线中划线")
 	}
 	return nil
+}
+
+func extractAgentIdentityMap(agent map[string]interface{}) map[string]interface{} {
+	if agent == nil {
+		return nil
+	}
+	identity, _ := agent["identity"].(map[string]interface{})
+	return identity
+}
+
+func shouldStrictValidateAgentAvatar(existingAgent, payload map[string]interface{}) bool {
+	rawIdentity, ok := payload["identity"]
+	if !ok || rawIdentity == nil {
+		return false
+	}
+	identity, ok := rawIdentity.(map[string]interface{})
+	if !ok {
+		return true
+	}
+	rawAvatar, avatarProvided := identity["avatar"]
+	if !avatarProvided {
+		return false
+	}
+	nextAvatar := trimStringField(rawAvatar)
+	prevAvatar := ""
+	if existingIdentity := extractAgentIdentityMap(existingAgent); existingIdentity != nil {
+		prevAvatar = trimStringField(existingIdentity["avatar"])
+	}
+	return nextAvatar != prevAvatar
 }
 
 func validateAgentUniqueness(cfg *config.Config, list []map[string]interface{}, id, workspace, agentDir, skipID string) error {
