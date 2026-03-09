@@ -168,7 +168,7 @@ export default function Dashboard({ ws }: DashboardProps) {
       {/* Status cards */}
       <div className={`grid ${modern ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6' : 'grid-cols-2 lg:grid-cols-3 xl:grid-cols-5'} gap-4 shrink-0`}>
         <StatCard icon={Brain} label="OpenClaw" value={proc.running ? '运行中' : '未运行'}
-          sub={proc.running ? (proc.managedExternally ? '外部管理' : `PID ${proc.pid || '-'}`) : '需要启动'}
+          sub={proc.running ? `PID ${proc.pid || '-'}` : '需要启动'}
           color={proc.running ? 'text-emerald-600' : 'text-red-600'}
           bg={proc.running ? 'bg-emerald-50 dark:bg-emerald-900/20' : 'bg-red-50 dark:bg-red-900/20'} modern={modern} />
         <StatCard icon={Wifi} label="网关" value={gateway.running ? '在线' : '离线'}

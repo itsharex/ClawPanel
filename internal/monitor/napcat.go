@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -283,9 +284,13 @@ func (m *NapCatMonitor) checkAndUpdate() {
 	// When NapCat is running but WS/HTTP not yet listening, ensure network config exists.
 	// This handles the case where QQ just logged in and config was empty.
 	if containerRunning && (!wsConnected || !httpAvailable) && isPortReachable(6099) {
-		napcatDir := findNapCatShellDir(m.cfg)
-		if napcatDir != "" {
-			go ensureNapCatNetworkConfig(napcatDir)
+		if runtime.GOOS == "windows" {
+			napcatDir := findNapCatShellDir(m.cfg)
+			if napcatDir != "" {
+				go ensureNapCatNetworkConfig(napcatDir)
+			}
+		} else {
+			go ensureNapCatDockerNetworkConfig(m.cfg)
 		}
 	}
 
@@ -637,6 +642,135 @@ func ensureNapCatNetworkConfig(napcatShellDir string) {
 			log.Printf("[NapCat] wrote network config for UIN %s: %s", uin, p)
 		}
 	}
+}
+
+func ensureNapCatDockerNetworkConfig(cfg *config.Config) {
+	if runtime.GOOS == "windows" || cfg == nil {
+		return
+	}
+	_, wsToken, _ := cfg.ReadQQChannelState()
+	data, err := marshalMonitorOneBot11Config(wsToken)
+	if err != nil {
+		log.Printf("[NapCat] ensureNapCatDockerNetworkConfig marshal failed: %v", err)
+		return
+	}
+
+	paths := []string{"/app/napcat/config/onebot11.json"}
+	out, err := dockerOutput("exec", "openclaw-qq", "sh", "-c", "ls /app/napcat/config/onebot11_*.json /app/napcat/config/napcat_*.json 2>/dev/null || true")
+	if err == nil {
+		uins := map[string]bool{}
+		for _, raw := range strings.Fields(string(out)) {
+			base := filepath.Base(raw)
+			switch {
+			case strings.HasPrefix(base, "onebot11_") && strings.HasSuffix(base, ".json"):
+				uin := strings.TrimSuffix(strings.TrimPrefix(base, "onebot11_"), ".json")
+				if uin != "" {
+					uins[uin] = true
+				}
+			case strings.HasPrefix(base, "napcat_") && strings.HasSuffix(base, ".json") && !strings.HasPrefix(base, "napcat_protocol_"):
+				uin := strings.TrimSuffix(strings.TrimPrefix(base, "napcat_"), ".json")
+				if uin != "" {
+					uins[uin] = true
+				}
+			}
+		}
+		ordered := make([]string, 0, len(uins))
+		for uin := range uins {
+			ordered = append(ordered, uin)
+		}
+		sort.Strings(ordered)
+		for _, uin := range ordered {
+			paths = append(paths, "/app/napcat/config/onebot11_"+uin+".json")
+		}
+	}
+
+	for _, target := range paths {
+		existing, err := dockerOutput("exec", "openclaw-qq", "cat", target)
+		if err == nil && !shouldRewriteOneBotNetworkConfig(existing) {
+			continue
+		}
+		if err := dockerWriteFile(target, data); err != nil {
+			log.Printf("[NapCat] write docker network config %s failed: %v", target, err)
+			continue
+		}
+		log.Printf("[NapCat] ensured docker network config: %s", target)
+	}
+}
+
+func marshalMonitorOneBot11Config(wsToken string) ([]byte, error) {
+	payload := map[string]interface{}{
+		"network": map[string]interface{}{
+			"websocketServers": []map[string]interface{}{{
+				"name":                 "ClawPanel-WS",
+				"enable":               true,
+				"host":                 "0.0.0.0",
+				"port":                 3001,
+				"messagePostFormat":    "array",
+				"token":                strings.TrimSpace(wsToken),
+				"reportSelfMessage":    true,
+				"enableForcePushEvent": true,
+				"debug":                false,
+				"heartInterval":        30000,
+			}},
+			"httpServers": []map[string]interface{}{{
+				"name":              "ClawPanel-HTTP",
+				"enable":            true,
+				"port":              3000,
+				"host":              "0.0.0.0",
+				"enableCors":        true,
+				"enableWebsocket":   false,
+				"messagePostFormat": "array",
+				"token":             "",
+				"debug":             false,
+			}},
+			"httpSseServers":   []interface{}{},
+			"httpClients":      []interface{}{},
+			"websocketClients": []interface{}{},
+			"plugins":          []interface{}{},
+		},
+		"musicSignUrl":        "",
+		"enableLocalFile2Url": true,
+		"parseMultMsg":        true,
+		"imageDownloadProxy":  "",
+	}
+	return json.MarshalIndent(payload, "", "  ")
+}
+
+func shouldRewriteOneBotNetworkConfig(raw []byte) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var cur map[string]interface{}
+	if json.Unmarshal(raw, &cur) != nil {
+		return true
+	}
+	netCfg, _ := cur["network"].(map[string]interface{})
+	if netCfg == nil {
+		return true
+	}
+	wsServers, _ := netCfg["websocketServers"].([]interface{})
+	httpServers, _ := netCfg["httpServers"].([]interface{})
+	return len(wsServers) == 0 && len(httpServers) == 0
+}
+
+func dockerWriteFile(target string, data []byte) error {
+	tmp, err := os.CreateTemp("", "clawpanel-napcat-*.json")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if out, err := exec.Command("docker", "cp", tmpPath, "openclaw-qq:"+target).CombinedOutput(); err != nil {
+		return fmt.Errorf("docker cp failed: %v %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // findQQInstallDir returns the directory containing QQ.exe by checking running processes

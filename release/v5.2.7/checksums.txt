@@ -1,0 +1,6 @@
+af5e82446e92a9ea9e7c5224e0fbb1efae090bd7a6d6cdd3f2228f89fbfd7791  ClawPanel-Setup-v5.2.7.exe
+fad53d9185cda3207444de2192243b2766b0af81b5db8c5b6966b5a53efc3c76  clawpanel-v5.2.7-darwin-amd64
+ddfc8910c6fcf05a349db789e7b7694861ccf833cb9d293dafb93d55146461fe  clawpanel-v5.2.7-darwin-arm64
+ca906f51f49f592836bab46f8aa86de5d09ec774e4a6828e7e6d3937d5a5436b  clawpanel-v5.2.7-linux-amd64
+dd53c962e7cf7f34da907eb676dfe2bcd42f7b5f3e9dfc7bf33a63840f7f35ba  clawpanel-v5.2.7-linux-arm64
+265494b054401f055a732c19a68aaff97d6276dc93cdc2cbf52f1fd8710d77cf  clawpanel-v5.2.7-windows-amd64.exe

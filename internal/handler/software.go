@@ -14,6 +14,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/zhaoxinyi02/ClawPanel/internal/config"
+	"github.com/zhaoxinyi02/ClawPanel/internal/monitor"
+	"github.com/zhaoxinyi02/ClawPanel/internal/plugin"
 	"github.com/zhaoxinyi02/ClawPanel/internal/process"
 	"github.com/zhaoxinyi02/ClawPanel/internal/taskman"
 )
@@ -535,6 +537,109 @@ func CleanupQQChannel(cfg *config.Config, tm *taskman.Manager, procMgr *process.
 		}()
 		c.JSON(http.StatusOK, gin.H{"ok": true, "taskId": task.ID})
 	}
+}
+
+func DeleteQQChannel(cfg *config.Config, tm *taskman.Manager, procMgr *process.Manager, pm *plugin.Manager, napcatMon *monitor.NapCatMonitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if tm.HasRunningTask("delete_qq_channel") {
+			c.JSON(http.StatusOK, gin.H{"ok": false, "error": "已有 QQ 通道删除任务正在进行中"})
+			return
+		}
+		task := tm.CreateTask("删除 QQ 通道", "delete_qq_channel")
+		go func() {
+			backup, err := backupOpenClawConfigRaw(cfg)
+			if err != nil {
+				tm.FinishTask(task, err)
+				return
+			}
+			task.AppendLog("💾 已备份当前 OpenClaw 配置")
+
+			if napcatMon != nil {
+				napcatMon.Pause()
+			}
+
+			if err := removeNapCatInstall(task.AppendLog, cfg); err != nil {
+				tm.FinishTask(task, err)
+				return
+			}
+
+			if pm != nil {
+				if err := pm.UninstallWithProgress("qq", true, task.AppendLog); err != nil {
+					if !strings.Contains(err.Error(), "未安装") {
+						tm.FinishTask(task, fmt.Errorf("卸载 QQ 插件失败: %w", err))
+						return
+					}
+					task.AppendLog("ℹ️ 未检测到 QQ 插件安装记录，跳过插件卸载")
+				}
+			}
+
+			ocConfig, err := cfg.ReadOpenClawJSON()
+			if err != nil || ocConfig == nil {
+				ocConfig = map[string]interface{}{}
+			}
+			removeQQChannelConfig(ocConfig)
+			if err := cfg.WriteOpenClawJSON(ocConfig); err != nil {
+				tm.FinishTask(task, err)
+				return
+			}
+			task.AppendLog("🧹 已清空 openclaw.json 中的 QQ 通道配置")
+
+			clearQQChannelManaged(cfg)
+			task.AppendLog("🧽 已清理 QQ 通道托管标记")
+
+			if err := restartOpenClawGateway(cfg, procMgr); err != nil {
+				_ = restoreOpenClawConfigRaw(cfg, backup)
+				tm.FinishTask(task, fmt.Errorf("OpenClaw 重启失败，已回滚配置: %w", err))
+				return
+			}
+			task.AppendLog("🔄 OpenClaw 网关已重启")
+			task.AppendLog("✅ QQ 通道、NapCat、插件与相关配置已删除")
+			tm.FinishTask(task, nil)
+		}()
+		c.JSON(http.StatusOK, gin.H{"ok": true, "taskId": task.ID, "message": "QQ 通道删除任务已创建，请在消息中心查看进度"})
+	}
+}
+
+func removeNapCatInstall(logf func(string), cfg *config.Config) error {
+	if runtime.GOOS == "windows" {
+		monitor.StopNapCatPlatform()
+		napcatDir := getNapCatShellDir(cfg)
+		if strings.TrimSpace(napcatDir) == "" {
+			if logf != nil {
+				logf("ℹ️ 未检测到 NapCat Shell 安装目录，跳过 NapCat 删除")
+			}
+			return nil
+		}
+		if logf != nil {
+			logf("🗑️ 正在删除 NapCat Shell 安装目录")
+		}
+		if err := os.RemoveAll(napcatDir); err != nil {
+			return fmt.Errorf("删除 NapCat Shell 目录失败: %w", err)
+		}
+		return nil
+	}
+
+	if logf != nil {
+		logf("🛑 正在停止并删除 NapCat Docker 容器")
+	}
+	commands := [][]string{
+		{"rm", "-f", "openclaw-qq"},
+		{"volume", "rm", "-f", "napcat-qq-session", "napcat-config"},
+	}
+	for _, args := range commands {
+		cmd := exec.Command("docker", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			msg := strings.TrimSpace(string(out))
+			if msg == "" {
+				msg = err.Error()
+			}
+			if strings.Contains(msg, "No such container") || strings.Contains(msg, "No such volume") {
+				continue
+			}
+			return fmt.Errorf("docker %s 失败: %s", strings.Join(args, " "), msg)
+		}
+	}
+	return nil
 }
 
 func boolStatus(installed bool) string {

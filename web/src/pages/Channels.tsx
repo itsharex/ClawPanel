@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
-import { Radio, Wifi, WifiOff, QrCode, Key, Zap, UserCheck, Check, X, Power, Loader2, RefreshCw, LogOut, Sparkles, Download, Package, Wrench, Search, Copy, CheckCircle, AlertTriangle, AlertCircle } from 'lucide-react';
+import { Radio, Wifi, WifiOff, QrCode, Key, Zap, UserCheck, Check, X, Power, Loader2, RefreshCw, LogOut, Sparkles, Download, Package, Wrench, Search, Copy, CheckCircle, AlertTriangle, AlertCircle, Trash2 } from 'lucide-react';
 import { useI18n } from '../i18n';
 
 type ChannelFieldSection = 'default' | 'access' | 'conversation' | 'advanced';
@@ -538,6 +538,7 @@ export default function Channels() {
   const [diagnoseResult, setDiagnoseResult] = useState<any>(null);
   const [restarting, setRestarting] = useState(false);
   const [installedPlugins, setInstalledPlugins] = useState<any[]>([]);
+  const [installingChannelPlugin, setInstallingChannelPlugin] = useState<string | null>(null);
   const [channelDrafts, setChannelDrafts] = useState<Record<string, any>>({});
   const [channelFieldTextDrafts, setChannelFieldTextDrafts] = useState<Record<string, string>>({});
   const [feishuAdvancedAccounts, setFeishuAdvancedAccounts] = useState(false);
@@ -622,6 +623,27 @@ export default function Channels() {
       else setMsg(`❌ ${r.error || '安装失败'}`);
     } catch { setMsg('❌ 安装请求失败'); }
     finally { setInstallingSw(null); setTimeout(() => { setMsg(''); loadSoftware(); }, 5000); }
+  };
+
+  const handleInstallChannelPlugin = async (pluginId: string) => {
+    setInstallingChannelPlugin(pluginId);
+    try {
+      const r = await api.installPlugin(pluginId);
+      if (r.ok) {
+        setMsg(r.message || `✅ ${pluginId} 安装任务已创建，请在消息中心查看进度`);
+        setTimeout(() => {
+          setMsg('');
+          loadInstalledPlugins();
+          reload();
+        }, 5000);
+      } else {
+        setMsg(`❌ ${r.error || '安装失败'}`);
+      }
+    } catch {
+      setMsg('❌ 安装请求失败');
+    } finally {
+      setInstallingChannelPlugin(null);
+    }
   };
 
   const isContainerInstalled = (id: string) => {
@@ -1147,6 +1169,27 @@ export default function Channels() {
     } catch (err) { setMsg('重启失败: ' + String(err)); setRestarting(false); }
   };
 
+  const handleDeleteQQChannel = async () => {
+    if (!confirm('确定要一键删除 QQ 通道吗？这会卸载 NapCat、卸载 qq 插件，并清空 openclaw.json 中所有 QQ 相关配置与登录数据。')) return;
+    try {
+      const r = await api.deleteQQChannel();
+      if (r.ok) {
+        setMsg(r.message || 'QQ 通道删除任务已创建，请在消息中心查看进度');
+        setTimeout(() => {
+          reload();
+          loadSoftware();
+          loadInstalledPlugins();
+          loadNapcatStatus();
+          setMsg('');
+        }, 5000);
+      } else {
+        setMsg(r.error || '删除 QQ 通道失败');
+      }
+    } catch (err) {
+      setMsg('删除 QQ 通道失败: ' + String(err));
+    }
+  };
+
   const handleDiagnose = async (repair: boolean) => {
     setDiagnosing(true);
     setDiagnoseResult(null);
@@ -1512,13 +1555,23 @@ export default function Channels() {
               <div>
                 <h3 className="text-lg font-bold text-gray-900 dark:text-white">{currentDef.label} 插件未安装</h3>
                 <p className="text-sm text-gray-500 mt-1">
-                  需要先安装 {currentDef.label} 插件才能配置此通道。请前往「插件中心」安装。
+                  需要先安装 {currentDef.label} 插件才能配置此通道。这里会直接调用官方插件安装命令，无需跳转插件中心。
                 </p>
               </div>
-              <button onClick={() => navigate('/plugins')} className={`${modern ? 'page-modern-accent px-6 py-3 text-sm' : 'inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl'}`}>
-                <Download size={16} />
-                前往插件中心安装
-              </button>
+              <div className="flex items-center justify-center gap-3 flex-wrap">
+                <button
+                  onClick={() => handleInstallChannelPlugin(currentDef.id)}
+                  disabled={installingChannelPlugin !== null}
+                  className={`${modern ? 'page-modern-accent px-6 py-3 text-sm' : 'inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all shadow-lg shadow-violet-200 dark:shadow-none hover:shadow-xl'}`}
+                >
+                  {installingChannelPlugin === currentDef.id ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                  {installingChannelPlugin === currentDef.id ? '安装中...' : `一键安装 ${currentDef.label}`}
+                </button>
+                <button onClick={() => navigate('/plugins')} className={`${modern ? 'page-modern-action px-6 py-3 text-sm' : 'inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-600 transition-all'}`}>
+                  <Package size={16} />
+                  查看插件中心
+                </button>
+              </div>
             </div>
           )}
 
@@ -1581,6 +1634,9 @@ export default function Channels() {
                           <button onClick={handleRestartNapcat} disabled={restarting} className={`${modern ? 'page-modern-warn px-3 py-1.5 text-xs' : 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 hover:bg-orange-100 dark:hover:bg-orange-900/50 disabled:opacity-50 transition-colors'}`}>
                             {restarting ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                             {restarting ? '重启中...' : '重启NapCat'}
+                          </button>
+                          <button onClick={handleDeleteQQChannel} className={`${modern ? 'page-modern-danger px-3 py-1.5 text-xs' : 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors'}`}>
+                            <Trash2 size={14} />删除QQ通道
                           </button>
                         </>
                       )}

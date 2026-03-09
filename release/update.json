@@ -1,20 +1,20 @@
 {
-  "latest_version": "5.2.6",
-  "release_time": "2026-03-09T00:03:00+08:00",
-  "release_note": "## v5.2.6 - Telegram 通道可用性修复与运行状态告警增强\n\n### Telegram 通道\n- Telegram 配置改为按 OpenClaw schema 正确写入 channels.telegram.botToken，避免把 token 写进错误字段后导致网关启动异常\n- Telegram 保存配置后会自动请求重载网关，避免保存成功后仍继续使用旧配置\n- 当 dmPolicy=open 或 groupPolicy=open 时，自动补齐 allowFrom=[\"*\"] / groupAllowFrom=[\"*\"]，确保用户切到开放模式后通道可立即正常使用\n\n### 运行状态提示\n- 仪表盘和全局布局改为显示真实 OpenClaw / 网关健康状态，不再固定显示系统运行正常\n- 运行依赖页面在 OpenClaw / 网关异常时会展示醒目提示，降低误操作风险",
+  "latest_version": "5.2.7",
+  "release_time": "2026-03-09T08:57:00+08:00",
+  "release_note": "## v5.2.7 - QQ 通道稳定性修复与插件安装体验改进\n\n### QQ (NapCat)\n- 收紧 QQ 自动接管条件，避免用户未启用时被默认写入 openclaw.json\n- 为 Docker 版 NapCat 增加账号级 onebot11_<uin>.json 网络配置自修复，降低登录后掉线与 WS / HTTP 不可用的问题\n- 新增删除 QQ 通道按钮，可一键删除 NapCat、卸载 qq 插件、清空 QQ 相关配置并重启网关\n\n### 通道安装与插件仓库\n- 插件型通道支持在通道页直接一键安装，不再必须跳转插件中心\n- 修复插件镜像仓库缺失 registry.json 的问题，并新增 Gitee 回退源，减少用户刷新后只看到部分插件的情况\n\n### 运行状态\n- 只要检测到 OpenClaw 正在运行且网关在线，就统一视为运行正常，不再额外显示外部管理告警",
   "download_urls": {
-    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.6-linux-amd64",
-    "linux_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.6-linux-arm64",
-    "darwin_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.6-darwin-amd64",
-    "darwin_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.6-darwin-arm64",
-    "windows_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.6-windows-amd64.exe"
+    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.7-linux-amd64",
+    "linux_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.7-linux-arm64",
+    "darwin_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.7-darwin-amd64",
+    "darwin_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.7-darwin-arm64",
+    "windows_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-v5.2.7-windows-amd64.exe"
   },
   "sha256": {
-    "linux_amd64": "128770f72baf0ddb43bdf09c198df1a959d5b0cacadc8ec75a4a2f34ee86049c",
-    "linux_arm64": "8088a747bf0403eb4ec06ffa8298ca0ff43619c0594ed6477c2b0c703db47dd2",
-    "darwin_amd64": "0da09bb7e88c88b5632befe34c7a464c2ed13e75b022de351d4b56678a7acf67",
-    "darwin_arm64": "ad9ca48995dc0be3d2971e232fb485cfd9f7833e378f284b1b62af8532ab79e3",
-    "windows_amd64": "5e6812b5cc58b516c5408293a5f08c816e8b7461848ad4adb6c0f6f376b6a8fb"
+    "linux_amd64": "ca906f51f49f592836bab46f8aa86de5d09ec774e4a6828e7e6d3937d5a5436b",
+    "linux_arm64": "dd53c962e7cf7f34da907eb676dfe2bcd42f7b5f3e9dfc7bf33a63840f7f35ba",
+    "darwin_amd64": "fad53d9185cda3207444de2192243b2766b0af81b5db8c5b6966b5a53efc3c76",
+    "darwin_arm64": "ddfc8910c6fcf05a349db789e7b7694861ccf833cb9d293dafb93d55146461fe",
+    "windows_amd64": "265494b054401f055a732c19a68aaff97d6276dc93cdc2cbf52f1fd8710d77cf"
   },
   "major_change": false,
   "change_warning": ""

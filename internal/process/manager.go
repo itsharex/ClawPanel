@@ -859,6 +859,16 @@ func (m *Manager) ensureOpenClawConfig() {
 		qqExtInstalled = true
 	}
 	qqShouldManage, qqManagedByNapCat := m.shouldManageQQIntegration(cfg, qqExtDir)
+	qqInstallPath := ""
+	if pl, ok := cfg["plugins"].(map[string]interface{}); ok {
+		if ins, ok := pl["installs"].(map[string]interface{}); ok {
+			if qqIns, ok := ins["qq"].(map[string]interface{}); ok {
+				if p, ok := qqIns["installPath"].(string); ok {
+					qqInstallPath = p
+				}
+			}
+		}
+	}
 
 	if qqExtInstalled && qqShouldManage {
 		// Ensure channels.qq with wsUrl
@@ -970,17 +980,7 @@ func (m *Manager) ensureOpenClawConfig() {
 	// Patch QQ plugin channel implementation: startAccount must return
 	// a long-lived Promise (covers both src/channel.ts and dist/channel.js,
 	// and both config-local/extensions and npm-global install paths).
-	qqInstallPath := ""
-	if pl, ok := cfg["plugins"].(map[string]interface{}); ok {
-		if ins, ok := pl["installs"].(map[string]interface{}); ok {
-			if qqIns, ok := ins["qq"].(map[string]interface{}); ok {
-				if p, ok := qqIns["installPath"].(string); ok {
-					qqInstallPath = p
-				}
-			}
-		}
-	}
-	if qqShouldManage {
+	if qqExtInstalled || strings.TrimSpace(qqInstallPath) != "" {
 		m.patchQQPluginChannel(ocDir, qqInstallPath)
 	}
 	m.patchWecomPluginChannel(ocDir)
@@ -990,35 +990,42 @@ func (m *Manager) ensureOpenClawConfig() {
 func (m *Manager) shouldManageQQIntegration(ocConfig map[string]interface{}, qqExtDir string) (bool, bool) {
 	pluginInstalled := m.isPanelPluginInstalled("qq")
 	napcatInstalled := m.hasManagedNapCatInstall()
-	if !pluginInstalled && !napcatInstalled && !m.qqChannelSetupMarked() {
-		return false, false
-	}
+	setupMarked := m.qqChannelSetupMarked()
 	if strings.TrimSpace(qqExtDir) != "" {
 		if _, err := os.Stat(qqExtDir); err != nil {
 			return false, napcatInstalled
 		}
 	}
-	hasExistingQQConfig := false
-	if ocConfig != nil {
-		if channels, ok := ocConfig["channels"].(map[string]interface{}); ok && channels != nil {
-			if _, ok := channels["qq"].(map[string]interface{}); ok {
-				hasExistingQQConfig = true
+	hasExistingQQConfig := hasExistingQQIntegrationConfig(ocConfig)
+	return shouldManageQQIntegrationState(pluginInstalled, napcatInstalled, setupMarked, hasExistingQQConfig)
+}
+
+func hasExistingQQIntegrationConfig(ocConfig map[string]interface{}) bool {
+	if ocConfig == nil {
+		return false
+	}
+	if channels, ok := ocConfig["channels"].(map[string]interface{}); ok && channels != nil {
+		if _, ok := channels["qq"].(map[string]interface{}); ok {
+			return true
+		}
+	}
+	if pl, ok := ocConfig["plugins"].(map[string]interface{}); ok && pl != nil {
+		if ent, ok := pl["entries"].(map[string]interface{}); ok && ent != nil {
+			if _, ok := ent["qq"].(map[string]interface{}); ok {
+				return true
 			}
 		}
-		if pl, ok := ocConfig["plugins"].(map[string]interface{}); ok && pl != nil {
-			if ent, ok := pl["entries"].(map[string]interface{}); ok && ent != nil {
-				if _, ok := ent["qq"].(map[string]interface{}); ok {
-					hasExistingQQConfig = true
-				}
-			}
-			if ins, ok := pl["installs"].(map[string]interface{}); ok && ins != nil {
-				if _, ok := ins["qq"].(map[string]interface{}); ok {
-					hasExistingQQConfig = true
-				}
+		if ins, ok := pl["installs"].(map[string]interface{}); ok && ins != nil {
+			if _, ok := ins["qq"].(map[string]interface{}); ok {
+				return true
 			}
 		}
 	}
-	if !m.qqChannelSetupMarked() && !hasExistingQQConfig {
+	return false
+}
+
+func shouldManageQQIntegrationState(pluginInstalled, napcatInstalled, setupMarked, hasExistingQQConfig bool) (bool, bool) {
+	if !setupMarked && !hasExistingQQConfig {
 		return false, false
 	}
 	return pluginInstalled || napcatInstalled || hasExistingQQConfig, napcatInstalled

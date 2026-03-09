@@ -108,6 +108,7 @@ const _api = {
   setupQQChannel: () => post('/openclaw/qq-channel/setup'),
   repairQQChannel: () => post('/openclaw/qq-channel/repair'),
   cleanupQQChannel: () => post('/openclaw/qq-channel/cleanup'),
+  deleteQQChannel: () => post('/openclaw/qq-channel/delete'),
   switchFeishuVariant: (variant: 'official' | 'clawteam') => post('/openclaw/feishu-variant', { variant }),
   // WeChat
   wechatStatus: () => get('/wechat/status'),

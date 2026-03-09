@@ -21,6 +21,8 @@ const (
 	RegistryURL = "https://raw.githubusercontent.com/zhaoxinyi02/ClawPanel-Plugins/main/registry.json"
 	// RegistryMirrorURL is the China mirror
 	RegistryMirrorURL = "http://39.102.53.188:16198/clawpanel/plugins/registry.json"
+	// RegistryFallbackURLCN is the Gitee fallback when GitHub is unreachable in CN networks
+	RegistryFallbackURLCN = "https://gitee.com/zhaoxinyi02/ClawPanel-Plugins/raw/main/registry.json"
 )
 
 // PluginMeta represents a plugin's metadata (plugin.json)
@@ -131,8 +133,8 @@ func (m *Manager) FetchRegistry() (*Registry, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	bundled := m.loadBundledRegistry()
 
-	// Try mirror first (faster in China), then GitHub
-	urls := []string{RegistryMirrorURL, RegistryURL}
+	// Try mirror first (faster in China), then GitHub, then Gitee fallback
+	urls := []string{RegistryMirrorURL, RegistryURL, RegistryFallbackURLCN}
 	var lastErr error
 	for _, url := range urls {
 		resp, err := client.Get(url)

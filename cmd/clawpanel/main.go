@@ -221,6 +221,7 @@ func runServer(stopCh chan struct{}) {
 			auth.POST("/openclaw/qq-channel/setup", handler.SetupQQChannel(cfg, taskMgr, procMgr))
 			auth.POST("/openclaw/qq-channel/repair", handler.RepairQQChannel(cfg, taskMgr, procMgr))
 			auth.POST("/openclaw/qq-channel/cleanup", handler.CleanupQQChannel(cfg, taskMgr, procMgr))
+			auth.POST("/openclaw/qq-channel/delete", handler.DeleteQQChannel(cfg, taskMgr, procMgr, pluginMgr, napcatMon))
 			auth.POST("/openclaw/feishu-variant", handler.SwitchFeishuVariant(cfg, procMgr, sysLog))
 
 			// 进程管理

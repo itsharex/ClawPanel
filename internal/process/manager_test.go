@@ -28,6 +28,25 @@ func TestGatewayListening(t *testing.T) {
 	}
 }
 
+func TestShouldManageQQIntegrationStateRequiresExplicitOptIn(t *testing.T) {
+	t.Parallel()
+
+	manage, managedByNapCat := shouldManageQQIntegrationState(true, true, false, false)
+	if manage || managedByNapCat {
+		t.Fatalf("expected no QQ auto-management without flag/config, got manage=%v managedByNapCat=%v", manage, managedByNapCat)
+	}
+
+	manage, managedByNapCat = shouldManageQQIntegrationState(true, true, true, false)
+	if !manage || !managedByNapCat {
+		t.Fatalf("expected flagged QQ integration to be managed, got manage=%v managedByNapCat=%v", manage, managedByNapCat)
+	}
+
+	manage, managedByNapCat = shouldManageQQIntegrationState(false, false, false, true)
+	if !manage || managedByNapCat {
+		t.Fatalf("expected existing QQ config to be preserved without NapCat ownership, got manage=%v managedByNapCat=%v", manage, managedByNapCat)
+	}
+}
+
 func TestGatewayListeningFalseWhenPortClosed(t *testing.T) {
 
 	openclawDir := newOpenClawDir(t)

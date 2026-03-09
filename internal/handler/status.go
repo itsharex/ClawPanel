@@ -211,22 +211,14 @@ func buildOpenClawRuntimeHealth(configured bool, procStatus process.Status, gate
 	}
 
 	if procStatus.Running && gatewayRunning {
-		state := "healthy"
-		title := "OpenClaw 运行正常"
-		message := "OpenClaw 与网关均在线，消息处理与配置写入可正常进行。"
-		if procStatus.ManagedExternally {
-			state = "degraded"
-			title = "OpenClaw 已由外部实例接管"
-			message = "网关当前可用，但 ClawPanel 未直接托管该运行实例；停止或重启时请优先使用网关按钮或外部环境。"
-		}
 		return gin.H{
-			"state":          state,
-			"healthy":        state == "healthy",
-			"degraded":       state != "healthy",
+			"state":          "healthy",
+			"healthy":        true,
+			"degraded":       false,
 			"processRunning": procStatus.Running,
 			"gatewayRunning": gatewayRunning,
-			"title":          title,
-			"message":        message,
+			"title":          "OpenClaw 运行正常",
+			"message":        "OpenClaw 与网关均在线，消息处理与配置写入可正常进行。",
 		}
 	}
 
