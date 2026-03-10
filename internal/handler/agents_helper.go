@@ -135,6 +135,22 @@ func normalizeAgentPath(baseDir, rawPath string) string {
 	if rawPath == "" {
 		return ""
 	}
+	if rawPath == "~" || strings.HasPrefix(rawPath, "~/") || strings.HasPrefix(rawPath, "~"+string(filepath.Separator)) {
+		home, _ := os.UserHomeDir()
+		if home == "" {
+			home = os.Getenv("HOME")
+		}
+		if home == "" {
+			home = os.Getenv("USERPROFILE")
+		}
+		if home != "" {
+			if rawPath == "~" {
+				rawPath = home
+			} else {
+				rawPath = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(rawPath, "~/"), "~"+string(filepath.Separator)))
+			}
+		}
+	}
 	if filepath.IsAbs(rawPath) {
 		return filepath.Clean(rawPath)
 	}
@@ -142,6 +158,26 @@ func normalizeAgentPath(baseDir, rawPath string) string {
 		return filepath.Clean(rawPath)
 	}
 	return filepath.Clean(filepath.Join(baseDir, rawPath))
+}
+
+func canonicalizeNormalizedAgentDir(normalized string) string {
+	normalized = filepath.Clean(strings.TrimSpace(normalized))
+	if normalized == "" || filepath.Base(normalized) != "agent" {
+		return normalized
+	}
+	if info, err := os.Stat(filepath.Join(normalized, "agent")); err == nil && info.IsDir() {
+		return normalized
+	}
+	if info, err := os.Stat(filepath.Join(normalized, "models.json")); err == nil && !info.IsDir() {
+		return filepath.Dir(normalized)
+	}
+	parent := filepath.Dir(normalized)
+	for _, sibling := range []string{"sessions", "auth", "credentials"} {
+		if info, err := os.Stat(filepath.Join(parent, sibling)); err == nil && info.IsDir() {
+			return parent
+		}
+	}
+	return normalized
 }
 
 func isPathWithinBase(baseDir, targetPath string) bool {
@@ -176,7 +212,10 @@ func resolveAgentRootDir(cfg *config.Config, agentID string) string {
 	ocConfig, _ := cfg.ReadOpenClawJSON()
 	if item := findAgentConfig(ocConfig, agentID); item != nil {
 		if agentDir, err := normalizeAgentPathWithinBase(cfg.OpenClawDir, toString(item["agentDir"])); err == nil && agentDir != "" {
-			return agentDir
+			// Upstream OpenClaw may return either the bundle root (agents/<id>)
+			// or the nested config dir (agents/<id>/agent). Session/auth stores live
+			// beside the config dir, so normalize the nested form back to its bundle root.
+			return canonicalizeNormalizedAgentDir(agentDir)
 		}
 	}
 	return filepath.Join(cfg.OpenClawDir, "agents", agentID)

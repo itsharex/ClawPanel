@@ -1071,6 +1071,186 @@ func TestGetSessionsAllowsImplicitMainForDiskOnlyConfig(t *testing.T) {
 	}
 }
 
+func TestGetSessionsSupportsUpstreamAgentDirSubdirLayout(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"default": "main",
+			"list": []interface{}{
+				map[string]interface{}{"id": "main", "agentDir": "agents/main/agent"},
+			},
+		},
+	})
+
+	sessionFile := filepath.Join(dir, "agents", "main", "sessions", "session-main.jsonl")
+	if err := os.MkdirAll(filepath.Dir(sessionFile), 0755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	if err := os.WriteFile(sessionFile, []byte(`{"type":"message","id":"1","message":{"role":"user","content":"hello"}}`+"\n"), 0644); err != nil {
+		t.Fatalf("write session file: %v", err)
+	}
+	writeJSON(t, filepath.Join(dir, "agents", "main", "sessions", "sessions.json"), map[string]interface{}{
+		"agent:main:main": map[string]interface{}{
+			"sessionId":   "session-main",
+			"chatType":    "direct",
+			"updatedAt":   float64(1000),
+			"sessionFile": sessionFile,
+		},
+	})
+
+	r := gin.New()
+	r.GET("/sessions", GetSessions(cfg))
+	req := httptest.NewRequest(http.MethodGet, "/sessions?agent=main", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		OK       bool          `json:"ok"`
+		Sessions []SessionInfo `json:"sessions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected ok=true")
+	}
+	if len(resp.Sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d (%s)", len(resp.Sessions), w.Body.String())
+	}
+	if resp.Sessions[0].SessionID != "session-main" {
+		t.Fatalf("expected session-main, got %+v", resp.Sessions[0])
+	}
+}
+
+func TestGetOpenClawAgentsCountsSessionsWithUpstreamAgentDirSubdirLayout(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"default": "main",
+			"list": []interface{}{
+				map[string]interface{}{"id": "main", "agentDir": "agents/main/agent"},
+			},
+		},
+	})
+
+	if err := os.MkdirAll(filepath.Join(dir, "agents", "main", "sessions"), 0755); err != nil {
+		t.Fatalf("mkdir sessions dir: %v", err)
+	}
+	writeJSON(t, filepath.Join(dir, "agents", "main", "sessions", "sessions.json"), map[string]interface{}{
+		"agent:main:main": map[string]interface{}{
+			"sessionId": "session-main",
+			"updatedAt": float64(1234567890),
+		},
+	})
+
+	r := gin.New()
+	r.GET("/openclaw/agents", GetOpenClawAgents(cfg))
+	req := httptest.NewRequest(http.MethodGet, "/openclaw/agents", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		OK     bool `json:"ok"`
+		Agents struct {
+			List []map[string]interface{} `json:"list"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected ok=true")
+	}
+	if len(resp.Agents.List) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(resp.Agents.List))
+	}
+	if got := int(resp.Agents.List[0]["sessions"].(float64)); got != 1 {
+		t.Fatalf("expected session count 1, got %+v", resp.Agents.List[0])
+	}
+}
+
+func TestNormalizeAgentPathExpandsTilde(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	got := normalizeAgentPath("/ignored/base", "~/.openclaw/agents/main/agent")
+	want := filepath.Join(dir, ".openclaw", "agents", "main", "agent")
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestResolveAgentRootDirKeepsBundleRootNamedAgent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"list": []interface{}{
+				map[string]interface{}{"id": "work", "agentDir": "custom/agent"},
+			},
+		},
+	})
+
+	got := resolveAgentRootDir(cfg, "work")
+	want := filepath.Join(dir, "custom", "agent")
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestResolveAgentRootDirKeepsCustomBundleRootEndingWithAgent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"list": []interface{}{
+				map[string]interface{}{"id": "work", "agentDir": "custom/work/agent"},
+			},
+		},
+	})
+
+	got := resolveAgentRootDir(cfg, "work")
+	want := filepath.Join(dir, "custom", "work", "agent")
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestValidateAgentUniquenessRejectsNestedAgentDirAlias(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &config.Config{OpenClawDir: dir}
+	existing := []map[string]interface{}{
+		{"id": "work", "agentDir": "agents/work"},
+	}
+
+	err := validateAgentUniqueness(cfg, existing, "other", "", filepath.Join(dir, "agents", "work", "agent"), "")
+	if err == nil || !strings.Contains(err.Error(), "agentDir 已被占用") {
+		t.Fatalf("expected nested alias conflict, got %v", err)
+	}
+}
+
 func TestLoadDefaultAgentIDFallsBackToExistingDiskAgentWhenNoDefaultConfigured(t *testing.T) {
 	t.Parallel()
 

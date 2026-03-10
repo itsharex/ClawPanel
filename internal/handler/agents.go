@@ -877,6 +877,7 @@ func validateAgentUniqueness(cfg *config.Config, list []map[string]interface{}, 
 	if err != nil {
 		return fmt.Errorf("agentDir 必须位于 OpenClaw 目录内")
 	}
+	canonicalAgentDir := canonicalizeNormalizedAgentDir(agentDir)
 	for _, item := range list {
 		curID := strings.TrimSpace(toString(item["id"]))
 		if curID == "" || curID == skipID {
@@ -890,7 +891,11 @@ func validateAgentUniqueness(cfg *config.Config, list []map[string]interface{}, 
 			return fmt.Errorf("workspace 已被占用: %s", workspace)
 		}
 		normalizedAgentDir, err := normalizeAgentPathWithinBase(cfg.OpenClawDir, toString(item["agentDir"]))
-		if err == nil && agentDir != "" && agentDir == normalizedAgentDir {
+		canonicalExistingAgentDir := canonicalizeNormalizedAgentDir(normalizedAgentDir)
+		if err == nil && agentDir != "" && (agentDir == normalizedAgentDir ||
+			canonicalAgentDir == canonicalExistingAgentDir ||
+			agentDir == filepath.Join(canonicalExistingAgentDir, "agent") ||
+			normalizedAgentDir == filepath.Join(canonicalAgentDir, "agent")) {
 			return fmt.Errorf("agentDir 已被占用: %s", agentDir)
 		}
 	}
