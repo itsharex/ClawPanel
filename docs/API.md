@@ -235,6 +235,7 @@ Authorization: Bearer <token>
 > - OpenClaw 新运行态返回的子目录：`~/.openclaw/agents/work/agent`
 >
 > 无论哪种写法，ClawPanel 都会把同级的 `sessions/`、`auth/` 等运行时目录解析到正确位置。
+> 另外也允许把 `agentDir` 指向 OpenClaw 状态目录外的绝对路径；这只影响认证/模型等 agent 配置目录，`sessions/` 仍按 OpenClaw 规范保存在状态目录下。
 
 > v5.1.0+：保存时会校验：
 > - 当前 OpenClaw schema 不支持 `agent.contextTokens` / `agent.compaction`；面板会在保存时自动清理这两个 legacy per-agent 字段

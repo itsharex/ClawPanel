@@ -124,7 +124,7 @@ export default function Dashboard({ ws }: DashboardProps) {
           <div>
             <h3 className="text-lg font-bold text-gray-900 dark:text-white">OpenClaw 尚未安装</h3>
             <p className="text-sm text-gray-500 mt-1 max-w-md mx-auto">
-              ClawPanel 需要 OpenClaw AI 引擎才能正常工作。安装后即可配置模型、管理技能和连接通道。
+              ClawPanel 需要 OpenClaw 才能正常工作。安装后即可配置模型、管理技能和连接通道。
             </p>
           </div>
           <button onClick={handleInstallOpenClaw} disabled={installingOC}

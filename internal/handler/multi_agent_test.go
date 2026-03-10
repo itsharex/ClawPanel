@@ -1188,6 +1188,14 @@ func TestGetOpenClawAgentsCountsSessionsWithUpstreamAgentDirSubdirLayout(t *test
 func TestNormalizeAgentPathExpandsTilde(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	if runtime.GOOS == "windows" {
+		volume := filepath.VolumeName(dir)
+		if volume != "" {
+			t.Setenv("HOMEDRIVE", volume)
+			t.Setenv("HOMEPATH", strings.TrimPrefix(dir, volume))
+		}
+	}
 
 	got := normalizeAgentPath("/ignored/base", "~/.openclaw/agents/main/agent")
 	want := filepath.Join(dir, ".openclaw", "agents", "main", "agent")
@@ -2028,14 +2036,15 @@ func TestValidateAgentUniquenessNormalizesPaths(t *testing.T) {
 	}
 }
 
-func TestValidateAgentUniquenessRejectsAgentDirOutsideBase(t *testing.T) {
+func TestValidateAgentUniquenessAllowsAgentDirOutsideBase(t *testing.T) {
 	t.Parallel()
 
 	base := t.TempDir()
 	cfg := &config.Config{OpenClawDir: base}
-	err := validateAgentUniqueness(cfg, []map[string]interface{}{{"id": "main"}}, "work", "workspace/work", "../../tmp/evil", "")
-	if err == nil || !strings.Contains(err.Error(), "agentDir 必须位于 OpenClaw 目录内") {
-		t.Fatalf("expected out-of-base agentDir rejection, got %v", err)
+	external := filepath.Join(t.TempDir(), "isolated-agent")
+	err := validateAgentUniqueness(cfg, []map[string]interface{}{{"id": "main"}}, "work", "workspace/work", external, "")
+	if err != nil {
+		t.Fatalf("expected external agentDir to be accepted, got %v", err)
 	}
 }
 
@@ -2050,6 +2059,27 @@ func TestValidateAgentUniquenessRejectsAbsoluteAliasConflict(t *testing.T) {
 	}, "work", "", "custom/work-agent", "")
 	if err == nil {
 		t.Fatalf("expected absolute alias conflict")
+	}
+}
+
+func TestResolveAgentSessionsDirIgnoresConfiguredExternalAgentDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	external := filepath.Join(t.TempDir(), "external-agent", "agent")
+	cfg := &config.Config{OpenClawDir: dir}
+	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"list": []interface{}{
+				map[string]interface{}{"id": "work", "agentDir": external},
+			},
+		},
+	})
+
+	got := resolveAgentSessionsDir(cfg, "work")
+	want := filepath.Join(dir, "agents", "work", "sessions")
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
 

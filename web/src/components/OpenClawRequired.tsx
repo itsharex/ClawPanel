@@ -117,9 +117,9 @@ export default function OpenClawRequired({ openclawStatus, processStatus, childr
       <div className="space-y-3">
         <div className="rounded-2xl border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/90 dark:bg-amber-950/20 px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <div className="text-sm font-semibold text-amber-900 dark:text-amber-200">OpenClaw 尚未就绪</div>
+            <div className="text-sm font-semibold text-amber-900 dark:text-amber-200">OpenClaw 尚未安装或配置</div>
             <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
-              已暂时关闭阻断提示，便于前端调试；当前页面的实时数据和保存能力可能不完整。
+              当前页面仍可浏览，但部分实时数据和保存功能可能暂时不可用。
             </p>
             {installBlockedMessage && <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">{installBlockedMessage}</p>}
           </div>
@@ -130,7 +130,7 @@ export default function OpenClawRequired({ openclawStatus, processStatus, childr
               className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-xl bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-all"
             >
               {installing ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-              {installing ? '安装中...' : '安装 OpenClaw'}
+              {installing ? '安装中...' : '一键安装 OpenClaw'}
             </button>
             {installBlocked && (
               <>
@@ -173,7 +173,7 @@ export default function OpenClawRequired({ openclawStatus, processStatus, childr
           <div>
             <h3 className="text-lg font-bold text-gray-900 dark:text-white">需要安装或配置 OpenClaw</h3>
             <p className="text-sm text-gray-500 mt-1">
-              此功能依赖 OpenClaw AI 引擎。你可以先安装 / 配置，也可以先关闭提示继续调试页面结构。
+              此功能需要 OpenClaw。你可以先安装或配置，也可以先关闭提示继续查看页面。
             </p>
             {installBlockedMessage && <p className="text-xs text-amber-600 dark:text-amber-300 mt-3 leading-5">{installBlockedMessage}</p>}
           </div>
@@ -181,7 +181,7 @@ export default function OpenClawRequired({ openclawStatus, processStatus, childr
             <button onClick={handleInstall} disabled={installing || installBlocked}
               className="page-modern-accent inline-flex items-center justify-center gap-2 px-6 py-3 text-sm disabled:opacity-50">
               {installing ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-              {installing ? '安装中...' : '一键安装 OpenClaw'}
+              {installing ? '安装中...' : '安装 OpenClaw'}
             </button>
             {installBlocked && (
               <>

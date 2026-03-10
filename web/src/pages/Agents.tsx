@@ -4069,7 +4069,7 @@ export default function Agents() {
                   <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-[12px] text-amber-700 space-y-1.5">
                     <div><span className="font-medium">workspace</span> 只是默认工作目录，方便文件与上下文定位；它不是硬隔离边界。</div>
                     <div>如果需要更严格的执行限制，请在 <span className="font-medium">Access &amp; Safety</span> 里设置 <span className="font-mono">sandbox</span> 覆盖。</div>
-                    <div>当前 Panel 还会把 <span className="font-mono">workspace</span> / <span className="font-mono">agentDir</span> 约束在 OpenClaw 受管目录内；同一个 <span className="font-mono">agentDir</span> 不要复用，<span className="font-mono">workspace</span> 目前也不能与其它 Agent 重复。</div>
+                    <div><span className="font-mono">agentDir</span> 可以放在 OpenClaw 状态目录外，但同一个 <span className="font-mono">agentDir</span> 不要复用；<span className="font-mono">workspace</span> 目前也不能与其它 Agent 重复。</div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -4104,7 +4104,7 @@ export default function Agents() {
                         placeholder="workspaces/support"
                         className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
                       />
-                      <p className="mt-1 text-[11px] text-gray-400">用于默认文件读写位置，不代表执行隔离；当前 Panel 只接受 OpenClaw 受管目录内的路径。</p>
+                      <p className="mt-1 text-[11px] text-gray-400">用于默认文件读写位置，不代表执行隔离；可以填写绝对路径，但部分受保护的 core-files 功能仍要求落在面板受管工作区内。</p>
                       {workspaceConflict && (
                         <p className="mt-1 text-[11px] text-red-600">该 workspace 已被 Agent “{workspaceConflict.id}” 使用。</p>
                       )}
@@ -4117,7 +4117,7 @@ export default function Agents() {
                         placeholder="agents/support"
                         className="w-full mt-1 px-3 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
                       />
-                      <p className="mt-1 text-[11px] text-gray-400">建议每个 Agent 使用独立目录，避免 auth / session 文件冲突。</p>
+                      <p className="mt-1 text-[11px] text-gray-400">建议每个 Agent 使用独立目录，避免认证或模型配置互相覆盖；可填写 OpenClaw 状态目录外的绝对路径。</p>
                       {agentDirConflict && (
                         <p className="mt-1 text-[11px] text-red-600">该 agentDir 已被 Agent “{agentDirConflict.id}” 使用。</p>
                       )}
