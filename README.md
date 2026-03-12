@@ -221,26 +221,21 @@ curl -fsSL http://39.102.53.188:16198/clawpanel/scripts/install-lite.sh -o insta
 
 自动完成：下载 Lite Core → 安装到 `/opt/clawpanel-lite` → 注册 `clawpanel-lite` 服务 → 启动内置 OpenClaw。
 
-**ClawPanel Lite（Windows，PowerShell 管理员）**
-
-```powershell
-irm http://39.102.53.188:16198/clawpanel/scripts/install-lite.ps1 | iex
-```
-
-自动完成：下载 Lite Core → 安装到 `C:\ClawPanelLite` → 注册 `clawpanel-lite` 服务 → 启动内置 OpenClaw。
-
-或从 [Releases](https://github.com/zhaoxinyi02/ClawPanel/releases) 手动下载 `clawpanel-lite-core-v0.1.5-windows-amd64.tar.gz`，解压后运行。
-
-**ClawPanel Lite（macOS）**
+**ClawPanel Lite（macOS，预览阶段）**
 
 ```bash
 curl -fsSL http://39.102.53.188:16198/clawpanel/scripts/install-lite-macos.sh -o install-lite-macos.sh && sudo bash install-lite-macos.sh
 ```
 
-自动完成：下载 Lite Core → 安装到 `/opt/clawpanel-lite` → 注册 launchd 服务 → 启动内置 OpenClaw。
+说明：当前提供 `darwin-amd64 / darwin-arm64` 预览包，建议先在测试环境验证。安装后如遇“无法验证开发者”提示，可执行 `sudo xattr -d com.apple.quarantine /opt/clawpanel-lite/clawpanel-lite`。
 
-> [!NOTE]
-> macOS 安装后如遇 "无法验证开发者" 提示，运行 `sudo xattr -d com.apple.quarantine /opt/clawpanel-lite/clawpanel-lite`
+**ClawPanel Lite（Windows，预览阶段）**
+
+```powershell
+iwr http://39.102.53.188:16198/clawpanel/scripts/install-lite.ps1 -OutFile install-lite.ps1; powershell -ExecutionPolicy Bypass -File .\install-lite.ps1
+```
+
+说明：当前提供 `windows-amd64` 预览包，建议先在测试环境验证。
 
 **ClawPanel Pro（Linux / macOS）**
 
@@ -270,18 +265,17 @@ irm http://39.102.53.188:16198/clawpanel/scripts/install.ps1 | iex
 curl -fsSL http://39.102.53.188:16198/clawpanel/scripts/uninstall-lite.sh -o uninstall-lite.sh && sudo bash uninstall-lite.sh
 ```
 
-**ClawPanel Lite（Windows，PowerShell 管理员）**
-
-```powershell
-irm http://39.102.53.188:16198/clawpanel/scripts/uninstall-lite.ps1 | iex
-```
-
 **ClawPanel Lite（macOS）**
 
 ```bash
 curl -fsSL http://39.102.53.188:16198/clawpanel/scripts/uninstall-lite-macos.sh -o uninstall-lite-macos.sh && sudo bash uninstall-lite-macos.sh
 ```
 
+**ClawPanel Lite（Windows）**
+
+```powershell
+iwr http://39.102.53.188:16198/clawpanel/scripts/uninstall-lite.ps1 -OutFile uninstall-lite.ps1; powershell -ExecutionPolicy Bypass -File .\uninstall-lite.ps1
+```
 **ClawPanel Pro（Linux）**
 
 ```bash
