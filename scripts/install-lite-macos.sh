@@ -8,7 +8,7 @@ TAG_PREFIX="lite-v"
 ACCEL_BASE="http://39.102.53.188:16198/clawpanel"
 ACCEL_META_URL="${ACCEL_BASE}/update-lite.json"
 GITHUB_RELEASES_API="https://api.github.com/repos/${REPO}/releases?per_page=20"
-DEFAULT_VERSION="0.1.7"
+DEFAULT_VERSION="0.1.8"
 
 RED='\033[31m'
 GREEN='\033[32m'
@@ -138,6 +138,12 @@ mkdir -p "$INSTALL_DIR"
 rm -rf "$INSTALL_DIR"/*
 tar -xzf "$TMP_DIR/$PACKAGE_NAME" -C "$INSTALL_DIR"
 chmod +x "$INSTALL_DIR/clawpanel-lite" "$INSTALL_DIR/bin/clawlite-openclaw"
+if [[ -f "$INSTALL_DIR/runtime/node/bin/node" ]]; then
+  chmod +x "$INSTALL_DIR/runtime/node/bin/node"
+fi
+if [[ -f "$INSTALL_DIR/runtime/node/node" ]]; then
+  chmod +x "$INSTALL_DIR/runtime/node/node"
+fi
 ln -sf "$INSTALL_DIR/clawpanel-lite" /usr/local/bin/clawpanel-lite
 ln -sf "$INSTALL_DIR/bin/clawlite-openclaw" /usr/local/bin/clawlite-openclaw
 log "Lite 文件已部署到 ${INSTALL_DIR}"

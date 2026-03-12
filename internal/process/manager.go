@@ -107,7 +107,11 @@ func (m *Manager) Start() error {
 
 	// 构建启动命令
 	m.cmd = cmd
-	m.cmd.Dir = m.cfg.OpenClawDir
+	if m.cfg != nil && m.cfg.IsLiteEdition() {
+		m.cmd.Dir = m.cfg.BundledOpenClawWorkingDir()
+	} else {
+		m.cmd.Dir = m.cfg.OpenClawDir
+	}
 	m.cmd.Env = append(buildProcessEnv(),
 		fmt.Sprintf("OPENCLAW_DIR=%s", m.cfg.OpenClawDir),
 		fmt.Sprintf("OPENCLAW_STATE_DIR=%s", m.cfg.OpenClawDir),
@@ -173,7 +177,11 @@ func (m *Manager) Stop() error {
 
 	// First, ask OpenClaw CLI to stop the daemon gateway process.
 	if cmd, err := m.cfg.OpenClawCommand("gateway", "stop"); err == nil {
-		cmd.Dir = m.cfg.OpenClawDir
+		if m.cfg != nil && m.cfg.IsLiteEdition() {
+			cmd.Dir = m.cfg.BundledOpenClawWorkingDir()
+		} else {
+			cmd.Dir = m.cfg.OpenClawDir
+		}
 		cmd.Env = append(buildProcessEnv(),
 			fmt.Sprintf("OPENCLAW_DIR=%s", m.cfg.OpenClawDir),
 			fmt.Sprintf("OPENCLAW_STATE_DIR=%s", m.cfg.OpenClawDir),

@@ -343,7 +343,11 @@ func restartGatewayWithBinary(cfg *config.Config, procMgr *process.Manager, bin 
 	startErrs := make([]string, 0, len(startVariants))
 	for _, args := range startVariants {
 		cmd := exec.Command(bin, args...)
-		cmd.Dir = cfg.OpenClawDir
+		if cfg != nil && cfg.IsLiteEdition() {
+			cmd.Dir = cfg.BundledOpenClawWorkingDir()
+		} else {
+			cmd.Dir = cfg.OpenClawDir
+		}
 		cmd.Env = env
 		if err := cmd.Start(); err != nil {
 			startErrs = append(startErrs, fmt.Sprintf("%s: %v", strings.Join(args, " "), err))
@@ -374,7 +378,11 @@ func runGatewayCommand(cfg *config.Config, env []string, bin string, args ...str
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Dir = cfg.OpenClawDir
+	if cfg != nil && cfg.IsLiteEdition() {
+		cmd.Dir = cfg.BundledOpenClawWorkingDir()
+	} else {
+		cmd.Dir = cfg.OpenClawDir
+	}
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {

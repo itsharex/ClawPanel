@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-VERSION=${1:-${VERSION:-0.1.7}}
+VERSION=${1:-${VERSION:-0.1.8}}
 TARGET_OS=${TARGET_OS:-linux}
 TARGET_ARCH=${TARGET_ARCH:-amd64}
 NODE_VERSION=${NODE_VERSION:-22.22.1}
@@ -52,6 +52,24 @@ prune_openclaw_runtime() {
       ! -name telegram \
       ! -name feishu \
       -exec rm -rf {} +
+  fi
+}
+
+ensure_openclaw_runtime_ready() {
+  local root="$1"
+  local node_bin="$2"
+  if [[ ! -f "$root/package.json" ]]; then
+    echo "OpenClaw runtime 缺少 package.json: $root" >&2
+    exit 1
+  fi
+  if ! (cd "$root" && "$node_bin" -e 'import("./dist/entry.js").then(()=>process.exit(0)).catch(()=>process.exit(1))' >/dev/null 2>&1); then
+    echo "==> 补装 OpenClaw runtime 依赖" >&2
+    rm -rf "$root/node_modules" "$root/package-lock.json"
+    (cd "$root" && npm install --omit=dev --no-package-lock --registry="$NPM_REGISTRY" >/dev/null)
+  fi
+  if ! (cd "$root" && "$node_bin" -e 'import("./dist/entry.js").then(()=>process.exit(0)).catch((err)=>{console.error(err&&err.stack||err);process.exit(1)})'); then
+    echo "OpenClaw runtime 校验失败: dist/entry.js 无法导入" >&2
+    exit 1
   fi
 }
 
@@ -164,17 +182,20 @@ prepare_openclaw_runtime() {
   mkdir -p "$OPENCLAW_CACHE_DIR"
   if [[ -d "$OPENCLAW_CACHE_DIR/openclaw" && -f "$OPENCLAW_CACHE_DIR/openclaw/package.json" ]]; then
     copy_tree "$OPENCLAW_CACHE_DIR/openclaw" "$openclaw_stage/openclaw"
+    ensure_openclaw_runtime_ready "$openclaw_stage/openclaw" "$node_for_npm"
     return
   fi
   if [[ -n "$OPENCLAW_SRC" && -f "$OPENCLAW_SRC/package.json" ]]; then
     cp -a "$OPENCLAW_SRC" "$openclaw_stage/openclaw"
+    ensure_openclaw_runtime_ready "$openclaw_stage/openclaw" "$node_for_npm"
     rm -rf "$OPENCLAW_CACHE_DIR/openclaw"
-    cp -a "$OPENCLAW_SRC" "$OPENCLAW_CACHE_DIR/openclaw"
+    cp -a "$openclaw_stage/openclaw" "$OPENCLAW_CACHE_DIR/openclaw"
     return
   fi
   echo "==> 安装 OpenClaw runtime: ${OPENCLAW_VERSION}"
   npm install --omit=dev --no-package-lock --registry="$NPM_REGISTRY" --prefix "$openclaw_stage" "openclaw@${OPENCLAW_VERSION}" >/dev/null
   cp -a "$openclaw_stage/node_modules/openclaw" "$openclaw_stage/openclaw"
+  ensure_openclaw_runtime_ready "$openclaw_stage/openclaw" "$node_for_npm"
   rm -rf "$OPENCLAW_CACHE_DIR/openclaw"
   cp -a "$openclaw_stage/openclaw" "$OPENCLAW_CACHE_DIR/openclaw"
 }
@@ -250,6 +271,9 @@ fi
 
 mkdir -p "$STAGE_DIR/$(dirname "$NODE_TARGET_REL")"
 cp -a "$NODE_BIN" "$STAGE_DIR/$NODE_TARGET_REL"
+if [[ "$TARGET_OS" != "windows" ]]; then
+  chmod +x "$STAGE_DIR/$NODE_TARGET_REL"
+fi
 cp -a "$OPENCLAW_SRC" "$STAGE_DIR/runtime/openclaw"
 
 if [[ -d "$PLUGIN_ROOT" ]]; then

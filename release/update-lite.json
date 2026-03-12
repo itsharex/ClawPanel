@@ -1,12 +1,12 @@
 {
-  "latest_version": "0.1.7",
-  "release_time": "2026-03-12T15:15:00+08:00",
-  "release_note": "## ClawPanel Lite v0.1.7\n\n- 进一步收紧 Lite 与本机外部 openclaw 的隔离\n- Lite 不再走单独 OpenClaw 更新，统一按整包更新处理\n- Linux / macOS / Windows Lite 安装与卸载脚本已完成复核并同步公开入口",
+  "latest_version": "0.1.8",
+  "release_time": "2026-03-12T16:58:00+08:00",
+  "release_note": "## ClawPanel Lite v0.1.8\n\n- 修复 Lite 包漏打 OpenClaw 运行时依赖的问题\n- 补齐 tslog 等 production 依赖，解决 dist/entry.js 文件存在但无法导入的问题\n- 打包阶段新增 runtime smoke test，避免继续发布缺依赖坏包",
   "download_urls": {
-    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.7-linux-amd64.tar.gz",
-    "darwin_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.7-darwin-amd64.tar.gz",
-    "darwin_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.7-darwin-arm64.tar.gz",
-    "windows_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.7-windows-amd64.tar.gz"
+    "linux_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.8-linux-amd64.tar.gz",
+    "darwin_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.8-darwin-amd64.tar.gz",
+    "darwin_arm64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.8-darwin-arm64.tar.gz",
+    "windows_amd64": "http://39.102.53.188:16198/clawpanel/releases/clawpanel-lite-core-v0.1.8-windows-amd64.tar.gz"
   },
   "major_change": false,
   "change_warning": ""

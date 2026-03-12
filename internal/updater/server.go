@@ -1844,13 +1844,16 @@ func validateLitePackage(root string) error {
 		"clawpanel-lite",
 		"runtime",
 		filepath.Join("runtime", "openclaw"),
+		filepath.Join("runtime", "node"),
 	}
 	launcherName := "clawlite-openclaw"
+	nodeRel := filepath.Join("runtime", "node", "bin", "node")
 	if runtime.GOOS == "windows" {
 		required[0] = "clawpanel-lite.exe"
 		launcherName = "clawlite-openclaw.cmd"
+		nodeRel = filepath.Join("runtime", "node", "node.exe")
 	}
-	required = append(required, filepath.Join("bin", launcherName))
+	required = append(required, filepath.Join("bin", launcherName), nodeRel)
 	for _, rel := range required {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			return fmt.Errorf("缺少 %s", rel)

@@ -224,6 +224,14 @@ func (c *Config) BundledOpenClawAppDir() string {
 	return filepath.Join(root, "openclaw")
 }
 
+func (c *Config) BundledOpenClawWorkingDir() string {
+	app := strings.TrimSpace(c.BundledOpenClawAppDir())
+	if app != "" {
+		return app
+	}
+	return c.OpenClawDir
+}
+
 func (c *Config) BundledOpenClawEntrypoint() string {
 	app := c.BundledOpenClawAppDir()
 	for _, candidate := range []string{
@@ -291,7 +299,9 @@ func (c *Config) DefaultGatewayPort() int {
 func (c *Config) OpenClawCommand(args ...string) (*exec.Cmd, error) {
 	if c.IsLiteEdition() {
 		if launcher := c.BundledOpenClawLauncherPath(); launcher != "" {
-			return exec.Command(launcher, args...), nil
+			cmd := exec.Command(launcher, args...)
+			cmd.Dir = c.BundledOpenClawWorkingDir()
+			return cmd, nil
 		}
 		entry := c.BundledOpenClawEntrypoint()
 		if strings.HasSuffix(entry, ".mjs") {
@@ -300,10 +310,13 @@ func (c *Config) OpenClawCommand(args ...string) (*exec.Cmd, error) {
 				return nil, fmt.Errorf("Lite 版未找到内置 Node.js 运行时")
 			}
 			cmd := exec.Command(node, append([]string{entry}, args...)...)
+			cmd.Dir = c.BundledOpenClawWorkingDir()
 			return cmd, nil
 		}
 		if fileExists(entry) {
-			return exec.Command(entry, args...), nil
+			cmd := exec.Command(entry, args...)
+			cmd.Dir = c.BundledOpenClawWorkingDir()
+			return cmd, nil
 		}
 	}
 	if bin := DetectOpenClawBinaryPath(); bin != "" {
