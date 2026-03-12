@@ -255,6 +255,11 @@ func restartGatewayViaCLI(cfg *config.Config, procMgr *process.Manager) error {
 
 func candidateOpenClawBins(cfg *config.Config) []string {
 	bins := []string{}
+	if cfg != nil && cfg.IsLiteEdition() {
+		if launcher := cfg.BundledOpenClawLauncherPath(); launcher != "" {
+			bins = append(bins, launcher)
+		}
+	}
 	if p := config.DetectOpenClawBinaryPath(); p != "" {
 		bins = append(bins, p)
 	}
@@ -467,6 +472,23 @@ func CheckUpdate(cfg *config.Config) gin.HandlerFunc {
 }
 
 func resolveOpenClawCurrentVersion(cfg *config.Config) string {
+	if cfg != nil && cfg.IsLiteEdition() {
+		if v := normalizeVersion(detectOpenClawVersion(cfg)); v != "" {
+			return v
+		}
+		ocConfig, _ := cfg.ReadOpenClawJSON()
+		if ocConfig != nil {
+			if meta, ok := ocConfig["meta"].(map[string]interface{}); ok {
+				if v, ok := meta["lastTouchedVersion"].(string); ok {
+					if vv := normalizeVersion(v); vv != "" {
+						return vv
+					}
+				}
+			}
+		}
+		return "unknown"
+	}
+
 	// Prefer live CLI version first: this reflects what users see in terminal
 	// and avoids stale values from historical config/app paths.
 	if out := runCmd("openclaw", "--version"); out != "" {

@@ -269,6 +269,18 @@ func (c *Config) BundledNodeBinaryPath() string {
 	return ""
 }
 
+func (c *Config) BundledOpenClawLauncherPath() string {
+	for _, candidate := range []string{
+		filepath.Join(c.InstallRoot(), "bin", "clawlite-openclaw"),
+		filepath.Join(c.InstallRoot(), "bin", "clawlite-openclaw.cmd"),
+	} {
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func (c *Config) DefaultGatewayPort() int {
 	if c.IsLiteEdition() {
 		return 18790
@@ -278,6 +290,9 @@ func (c *Config) DefaultGatewayPort() int {
 
 func (c *Config) OpenClawCommand(args ...string) (*exec.Cmd, error) {
 	if c.IsLiteEdition() {
+		if launcher := c.BundledOpenClawLauncherPath(); launcher != "" {
+			return exec.Command(launcher, args...), nil
+		}
 		entry := c.BundledOpenClawEntrypoint()
 		if strings.HasSuffix(entry, ".mjs") {
 			node := c.BundledNodeBinaryPath()
