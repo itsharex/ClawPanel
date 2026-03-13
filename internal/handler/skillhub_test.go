@@ -516,9 +516,7 @@ func TestGetSkillHubCatalogMergesWorkspaceInstallState(t *testing.T) {
 		},
 	}
 	skillHubCacheTime = time.Now()
-	if err := os.MkdirAll(filepath.Join(workspace, "skills", "installed-skill"), 0o755); err != nil {
-		t.Fatalf("create installed skill dir: %v", err)
-	}
+	writeSkillFixture(t, filepath.Join(workspace, "skills", "installed-skill"), "Installed Skill", "Installed skill", "")
 	writeJSON(t, filepath.Join(workspace, ".skillhub", "install-state.json"), map[string]skillHubInstallRecord{
 		"failed-skill": {State: "failed", Message: "SSL certificate verify failed", UpdatedAt: 1772065840450},
 	})
@@ -575,9 +573,7 @@ func TestGetSkillHubCatalogGlobalTargetUsesManagedState(t *testing.T) {
 		},
 	}
 	skillHubCacheTime = time.Now()
-	if err := os.MkdirAll(filepath.Join(openClawDir, "skills", "managed-skill"), 0o755); err != nil {
-		t.Fatalf("create managed skill dir: %v", err)
-	}
+	writeSkillFixture(t, filepath.Join(openClawDir, "skills", "managed-skill"), "Managed Skill", "Managed skill", "")
 	writeJSON(t, filepath.Join(openClawDir, ".skillhub", "install-state.json"), map[string]skillHubInstallRecord{
 		"managed-skill": {State: "installed", UpdatedAt: 1772065840450},
 	})
@@ -593,6 +589,44 @@ func TestGetSkillHubCatalogGlobalTargetUsesManagedState(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"installTarget":"global"`) || !strings.Contains(w.Body.String(), `"installed":true`) {
 		t.Fatalf("expected global managed install state, got %s", w.Body.String())
+	}
+}
+
+func TestGetSkillHubCatalogIgnoresNonDiscoverableDir(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restore := resetSkillHubTestState(t)
+	defer restore()
+
+	root := resolvedTempDir(t)
+	workspace := filepath.Join(root, "workspace")
+	openClawDir := filepath.Join(root, "openclaw")
+	cfg := &config.Config{OpenClawDir: openClawDir, OpenClawWork: workspace}
+
+	skillHubCache = &skillHubCatalog{
+		Total:       1,
+		GeneratedAt: "2026-03-01T13:44:23Z",
+		Featured:    []string{"broken-skill"},
+		Categories:  map[string][]string{"AI 智能": {"ai"}},
+		Skills: []skillHubSkillItem{
+			{Slug: "broken-skill", Name: "Broken Skill"},
+		},
+	}
+	skillHubCacheTime = time.Now()
+	if err := os.MkdirAll(filepath.Join(workspace, "skills", "broken-skill"), 0o755); err != nil {
+		t.Fatalf("create invalid dir: %v", err)
+	}
+
+	r := gin.New()
+	r.GET("/system/skillhub/catalog", GetSkillHubCatalog(cfg))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/system/skillhub/catalog?agentId=main", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"installed":true`) {
+		t.Fatalf("expected invalid dir to remain not installed, got %s", w.Body.String())
 	}
 }
 

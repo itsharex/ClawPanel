@@ -604,6 +604,7 @@ func readInstalledClawHubState(workdir string) map[string]clawHubLockEntry {
 		lockEntries = lock.Skills
 	}
 	skillsDir := filepath.Join(workdir, "skills")
+	discoverable := listDiscoverableSkillKeys(skillsDir, "workspace")
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
 		return installed
@@ -613,6 +614,9 @@ func readInstalledClawHubState(workdir string) map[string]clawHubLockEntry {
 			continue
 		}
 		slug := entry.Name()
+		if _, ok := discoverable[slug]; !ok {
+			continue
+		}
 		state := readClawHubOriginEntry(filepath.Join(skillsDir, slug))
 		if lockEntry, ok := lockEntries[slug]; ok {
 			if state.Version == "" {

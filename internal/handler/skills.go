@@ -798,6 +798,23 @@ func discoverSkills(roots []skillDiscoveryRoot, skillEntries map[string]interfac
 	return skills
 }
 
+func listDiscoverableSkillKeys(root, source string) map[string]struct{} {
+	keys := make(map[string]struct{})
+	for _, skill := range discoverSkills([]skillDiscoveryRoot{{Dir: root, Source: source}}, nil, nil, nil) {
+		for _, key := range []string{
+			strings.TrimSpace(skill.ID),
+			strings.TrimSpace(skill.SkillKey),
+			strings.TrimSpace(filepath.Base(skill.Path)),
+		} {
+			if key == "" {
+				continue
+			}
+			keys[key] = struct{}{}
+		}
+	}
+	return keys
+}
+
 func scanSkillRoot(root, source string, skills *[]skillInfo, positions map[string]int, skillEntries map[string]interface{}, legacyBlocklist map[string]bool) {
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {

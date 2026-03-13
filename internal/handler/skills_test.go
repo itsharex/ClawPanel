@@ -455,6 +455,60 @@ func TestSearchClawHubMarksExistingSkillDirectoryInstalled(t *testing.T) {
 	}
 }
 
+func TestSearchClawHubIgnoresNonDiscoverableSkillDir(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	root := resolvedTempDir(t)
+	openClawDir := filepath.Join(root, "openclaw")
+	workspace := filepath.Join(root, "workspace", "main")
+	cfg := &config.Config{OpenClawDir: openClawDir, OpenClawWork: workspace}
+	writeJSON(t, filepath.Join(openClawDir, "openclaw.json"), map[string]interface{}{
+		"agents": map[string]interface{}{
+			"default": "main",
+			"list": []interface{}{
+				map[string]interface{}{"id": "main", "workspace": workspace},
+			},
+		},
+	})
+	if err := os.MkdirAll(filepath.Join(workspace, "skills", "weather"), 0o755); err != nil {
+		t.Fatalf("create invalid skill dir: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": []map[string]interface{}{{
+				"slug":        "weather",
+				"displayName": "Weather",
+				"summary":     "Public weather skill",
+				"version":     "1.2.0",
+			}},
+		})
+	}))
+	defer server.Close()
+	oldClient := clawHubHTTPClient
+	clawHubHTTPClient = server.Client()
+	defer func() { clawHubHTTPClient = oldClient }()
+	t.Setenv("CLAWHUB_SITE", server.URL)
+
+	r := gin.New()
+	r.GET("/system/clawhub/search", SearchClawHub(cfg))
+	req := httptest.NewRequest(http.MethodGet, "/system/clawhub/search?q=weather&agentId=main", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Skills []clawHubSkillItem `json:"skills"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Skills) != 1 || resp.Skills[0].Installed {
+		t.Fatalf("expected invalid skill dir to stay not installed, got %#v", resp.Skills)
+	}
+}
+
 func TestInstallClawHubSkillGlobalTargetUsesManagedRoot(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

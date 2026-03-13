@@ -465,8 +465,12 @@ func listInstalledSkillDirs(workdir string) (map[string]struct{}, error) {
 		}
 		return nil, fmt.Errorf("read workspace skills dir: %w", err)
 	}
+	discoverable := listDiscoverableSkillKeys(filepath.Join(workdir, "skills"), "workspace")
 	for _, entry := range entries {
 		if entry.IsDir() {
+			if _, ok := discoverable[entry.Name()]; !ok {
+				continue
+			}
 			installed[entry.Name()] = struct{}{}
 		}
 	}
