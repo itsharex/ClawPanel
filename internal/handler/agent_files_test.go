@@ -9,7 +9,7 @@ import (
 )
 
 func TestResolveAgentWorkspacePathSupportsWorkspaceVariants(t *testing.T) {
-	root := t.TempDir()
+	root, _ := filepath.EvalSymlinks(t.TempDir())
 	cfg := &config.Config{
 		OpenClawDir:  filepath.Join(root, ".openclaw"),
 		OpenClawWork: filepath.Join(root, ".openclaw"),
@@ -30,7 +30,7 @@ func TestResolveAgentWorkspacePathSupportsWorkspaceVariants(t *testing.T) {
 }
 
 func TestManagedAgentWorkspaceRootsIncludesRelativeWorkspaceParents(t *testing.T) {
-	root := t.TempDir()
+	root, _ := filepath.EvalSymlinks(t.TempDir())
 	cfg := &config.Config{
 		OpenClawDir:  filepath.Join(root, ".openclaw"),
 		OpenClawWork: filepath.Join(root, ".openclaw"),
@@ -54,7 +54,7 @@ func TestManagedAgentWorkspaceRootsIncludesRelativeWorkspaceParents(t *testing.T
 }
 
 func TestResolveAgentCoreWorkspaceFromExplicitPath(t *testing.T) {
-	root := t.TempDir()
+	root, _ := filepath.EvalSymlinks(t.TempDir())
 	cfg := &config.Config{
 		OpenClawDir:  filepath.Join(root, ".openclaw"),
 		OpenClawWork: filepath.Join(root, ".openclaw"),
