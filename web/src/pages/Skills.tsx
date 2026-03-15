@@ -176,6 +176,7 @@ export default function Skills() {
   const [skillHubCliLoading, setSkillHubCliLoading] = useState(false);
   const [skillHubCliInstalling, setSkillHubCliInstalling] = useState(false);
   const [storeEverLoaded, setStoreEverLoaded] = useState(false);
+  const [skillHubStoreEverLoaded, setSkillHubStoreEverLoaded] = useState(false);
   const skillHubPageSize = 30;
 
   const debouncedHubSearch = useCallback(() => {
@@ -256,7 +257,7 @@ export default function Skills() {
     setSkillHubError('');
     try {
       const r = await api.getSkillHubCatalog(selectedAgent, storeInstallTarget);
-      if (r.ok) { setSkillHubCatalog(r as SkillHubCatalog); setStoreEverLoaded(true); }
+      if (r.ok) { setSkillHubCatalog(r as SkillHubCatalog); setSkillHubStoreEverLoaded(true); }
       else setSkillHubError(r.error || t.skills.skillHubLoadError);
     } catch (err) {
       console.error('Failed to load SkillHub:', err);
@@ -539,7 +540,11 @@ export default function Skills() {
       if (r.ok) {
         setMsg(t.skills.uninstallSuccess.replace('{id}', skillId));
         await loadSkills();
-        if (tab === 'clawhub') await loadClawHub();
+        // 刷新当前商店视图以更新安装状态
+        if (tab === 'clawhub') {
+          if (hubSource === 'skillhub') await loadSkillHub();
+          else await loadClawHub();
+        }
       } else {
         setMsg(t.skills.uninstallFailed.replace('{id}', skillId));
       }
@@ -814,7 +819,7 @@ export default function Skills() {
         </button>
         <button onClick={() => setTab('clawhub')}
           className={`${modern ? 'px-3.5 py-2 rounded-xl text-sm font-medium transition-all flex items-center gap-2 border' : 'pb-3 text-sm font-medium border-b-2 transition-all flex items-center gap-2'} ${tab === 'clawhub' ? (modern ? 'border-blue-100/80 bg-blue-50/85 dark:bg-blue-900/20 dark:border-blue-800/40 text-blue-700 dark:text-blue-300 shadow-sm' : 'border-violet-600 text-violet-700 dark:text-violet-400') : (modern ? 'border-transparent text-gray-500 hover:bg-white/70 dark:hover:bg-slate-800/70 hover:text-gray-700 dark:hover:text-gray-300' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300')}`}>
-          <Globe size={16} />{t.skills.storeTab} <span className="bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-xs px-1.5 py-0.5 rounded-full">{storeEverLoaded ? storeBadgeCount : '\u00b7\u00b7\u00b7'}</span>
+          <Globe size={16} />{t.skills.storeTab} <span className="bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-xs px-1.5 py-0.5 rounded-full">{(storeEverLoaded || skillHubStoreEverLoaded) ? storeBadgeCount : '\u00b7\u00b7\u00b7'}</span>
         </button>
       </div>
 
