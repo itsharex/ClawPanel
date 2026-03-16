@@ -462,17 +462,29 @@ const CHANNEL_REQUIRED_FIELDS: Record<string, string[]> = {
   twitch: ['username', 'oauthToken', 'channels'],
 };
 // 飞书双版本：读取当前启用的变体
+const OFFICIAL_FEISHU_ENTRY_IDS = ['openclaw-lark', 'feishu-openclaw-plugin'] as const;
+
+function getEnabledPluginEntry(entries: Record<string, any>, ids: readonly string[]): string | null {
+  for (const id of ids) {
+    if (entries[id]?.enabled) return id;
+  }
+  return null;
+}
+
 function getActiveFeishuVariant(ocConfig: any): 'official' | 'clawteam' | null {
   const entries = ocConfig?.plugins?.entries || {};
-  if (entries['feishu-openclaw-plugin']?.enabled) return 'official';
+  if (getEnabledPluginEntry(entries, OFFICIAL_FEISHU_ENTRY_IDS)) return 'official';
   if (entries['feishu']?.enabled) return 'clawteam';
   return null;
 }
 
 // 飞书双版本：获取当前活跃的 plugin entry ID
 function getFeishuPluginEntryId(ocConfig: any): string {
-  const variant = getActiveFeishuVariant(ocConfig);
-  if (variant === 'official') return 'feishu-openclaw-plugin';
+  const entries = ocConfig?.plugins?.entries || {};
+  const activeOfficial = getEnabledPluginEntry(entries, OFFICIAL_FEISHU_ENTRY_IDS);
+  if (activeOfficial) return activeOfficial;
+  const knownOfficial = OFFICIAL_FEISHU_ENTRY_IDS.find(id => entries[id]);
+  if (knownOfficial) return knownOfficial;
   return 'feishu';
 }
 
@@ -483,17 +495,40 @@ function isQQPluginInstalled(installedPlugins: any[]) {
 function isQQActuallyInstalled(installedPlugins: any[], qqChannelState: any) {
   return !!(qqChannelState?.pluginInstalled || isQQPluginInstalled(installedPlugins));
 }
+
+function getWecomAppVirtualConfig(ocConfig: any): Record<string, any> {
+  const channels = isPlainObject(ocConfig?.channels) ? ocConfig.channels : {};
+  const wecom = isPlainObject(channels.wecom) ? channels.wecom : {};
+  const agent = isPlainObject(wecom.agent) ? { ...wecom.agent } : {};
+  const virtual = isPlainObject(channels['wecom-app']) ? channels['wecom-app'] : {};
+  if (virtual.enabled !== undefined) agent.enabled = virtual.enabled;
+  else if (agent.enabled === undefined) agent.enabled = false;
+  return agent;
+}
+
+function isWecomAppEnabled(ocConfig: any): boolean {
+  return !!getWecomAppVirtualConfig(ocConfig).enabled;
+}
+
+function isWecomBuiltinEnabled(ocConfig: any): boolean {
+  const wecomEnabled = !!ocConfig?.channels?.wecom?.enabled || !!ocConfig?.plugins?.entries?.wecom?.enabled;
+  return wecomEnabled && !isWecomAppEnabled(ocConfig);
+}
 // Determine channel status: 'enabled' (green), 'configured' (red/orange), 'unconfigured' (gray)
 function getChannelStatus(ch: ChannelDef, ocConfig: any): 'enabled' | 'configured' | 'unconfigured' {
   // wecom-app is backed by channels.wecom.agent
   const chConf = ch.id === 'wecom-app'
-    ? (() => { const w = ocConfig?.channels?.wecom; return isPlainObject(w?.agent) ? { ...w.agent, enabled: w?.enabled } : {}; })()
+    ? getWecomAppVirtualConfig(ocConfig)
     : (ocConfig?.channels?.[ch.id] || {});
   const pluginConf = ocConfig?.plugins?.entries?.[ch.id] || {};
   // 飞书特殊处理：任一变体 enabled 即视为 enabled
   const isEnabled = ch.id === 'feishu'
-    ? (pluginConf.enabled || ocConfig?.plugins?.entries?.['feishu-openclaw-plugin']?.enabled || chConf.enabled)
-    : (chConf.enabled || pluginConf.enabled);
+    ? (pluginConf.enabled || !!getEnabledPluginEntry(ocConfig?.plugins?.entries || {}, OFFICIAL_FEISHU_ENTRY_IDS) || chConf.enabled)
+    : ch.id === 'wecom-app'
+      ? isWecomAppEnabled(ocConfig)
+      : ch.id === 'wecom'
+        ? isWecomBuiltinEnabled(ocConfig)
+        : (chConf.enabled || pluginConf.enabled);
   // Check if any config field has a value
   const hasConfig = ch.configFields.some(f => {
     const v = getNestedValue(chConf, f.key);
@@ -720,7 +755,7 @@ export default function Channels() {
   const isPluginInstalled = (channelId: string) => {
     // 飞书特殊处理：任一版本已安装即视为已安装
     if (channelId === 'feishu') {
-      return installedPlugins.some((p: any) => p.id === 'feishu' || p.id === 'feishu-openclaw-plugin');
+      return installedPlugins.some((p: any) => p.id === 'feishu' || OFFICIAL_FEISHU_ENTRY_IDS.includes(p.id));
     }
     if (channelId === 'wecom') {
       return installedPlugins.some((p: any) => p.id === 'wecom' || p.id === 'wecom-openclaw-plugin');
@@ -775,8 +810,10 @@ export default function Channels() {
       const chConf = ocConfig?.channels?.[ch.id] || {};
       const pluginConf = ocConfig?.plugins?.entries?.[ch.id] || {};
       if (ch.id === 'feishu') {
-        return chConf.enabled || pluginConf.enabled || ocConfig?.plugins?.entries?.['feishu-openclaw-plugin']?.enabled;
+        return chConf.enabled || pluginConf.enabled || !!getEnabledPluginEntry(ocConfig?.plugins?.entries || {}, OFFICIAL_FEISHU_ENTRY_IDS);
       }
+      if (ch.id === 'wecom-app') return isWecomAppEnabled(ocConfig);
+      if (ch.id === 'wecom') return isWecomBuiltinEnabled(ocConfig);
       return chConf.enabled || pluginConf.enabled;
     });
     if (firstEnabled) setSelectedChannel(firstEnabled.id);
@@ -798,8 +835,10 @@ export default function Channels() {
       const chConf = ocConfig?.channels?.[ch.id] || {};
       const pluginConf = ocConfig?.plugins?.entries?.[ch.id] || {};
       if (ch.id === 'feishu') {
-        return chConf.enabled || pluginConf.enabled || ocConfig?.plugins?.entries?.['feishu-openclaw-plugin']?.enabled;
+        return chConf.enabled || pluginConf.enabled || !!getEnabledPluginEntry(ocConfig?.plugins?.entries || {}, OFFICIAL_FEISHU_ENTRY_IDS);
       }
+      if (ch.id === 'wecom-app') return isWecomAppEnabled(ocConfig);
+      if (ch.id === 'wecom') return isWecomBuiltinEnabled(ocConfig);
       return chConf.enabled || pluginConf.enabled;
     });
     if (firstEnabled) setSelectedChannel(firstEnabled.id);
@@ -816,10 +855,7 @@ export default function Channels() {
     if (isPlainObject(channelDrafts[channelId])) return channelDrafts[channelId];
     // wecom-app is backed by channels.wecom.agent in openclaw.json
     if (channelId === 'wecom-app') {
-      const wecom = ocChannels['wecom'] as any;
-      const agent = isPlainObject(wecom?.agent) ? { ...wecom.agent } : {};
-      if (wecom?.enabled !== undefined) agent['enabled'] = wecom.enabled;
-      return agent;
+      return getWecomAppVirtualConfig(ocConfig);
     }
     if (channelId === 'qqbot' && isPlainObject(ocChannels[channelId])) {
       const cfg = { ...ocChannels[channelId] } as any;
@@ -1080,8 +1116,10 @@ export default function Channels() {
 
   const isChannelEnabled = (channelId: string) => {
     if (channelId === 'feishu') {
-      return ocPlugins[channelId]?.enabled || ocPlugins['feishu-openclaw-plugin']?.enabled || ocChannels[channelId]?.enabled || false;
+      return ocPlugins[channelId]?.enabled || !!getEnabledPluginEntry(ocPlugins, OFFICIAL_FEISHU_ENTRY_IDS) || ocChannels[channelId]?.enabled || false;
     }
+    if (channelId === 'wecom-app') return isWecomAppEnabled(ocConfig);
+    if (channelId === 'wecom') return isWecomBuiltinEnabled(ocConfig);
     return ocChannels[channelId]?.enabled || ocPlugins[channelId]?.enabled || false;
   };
 

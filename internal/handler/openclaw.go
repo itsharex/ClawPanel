@@ -138,6 +138,59 @@ func preserveHiddenOpenClawFields(dst, src map[string]interface{}) {
 	}
 }
 
+func wecomAppActiveDir(cfg *config.Config) string {
+	if cfg == nil || strings.TrimSpace(cfg.OpenClawDir) == "" {
+		return ""
+	}
+	return filepath.Join(cfg.OpenClawDir, "extensions", "wecom-app")
+}
+
+func isWecomAppEnabled(cfg *config.Config) bool {
+	activeDir := wecomAppActiveDir(cfg)
+	if activeDir == "" {
+		return false
+	}
+	info, err := os.Stat(activeDir)
+	return err == nil && info.IsDir()
+}
+
+var officialFeishuEntryIDs = []string{"openclaw-lark", "feishu-openclaw-plugin"}
+
+func resolveInstalledOfficialFeishuEntryID(entries map[string]interface{}) string {
+	for _, id := range officialFeishuEntryIDs {
+		if _, ok := entries[id]; ok {
+			return id
+		}
+	}
+	return officialFeishuEntryIDs[0]
+}
+
+func injectWecomVirtualChannel(cfg *config.Config, ocConfig map[string]interface{}) {
+	if ocConfig == nil {
+		return
+	}
+	channels, _ := ocConfig["channels"].(map[string]interface{})
+	if channels == nil {
+		return
+	}
+	wecom, _ := channels["wecom"].(map[string]interface{})
+	if wecom == nil {
+		delete(channels, "wecom-app")
+		return
+	}
+	delete(channels, "wecom-app")
+	agent, _ := wecom["agent"].(map[string]interface{})
+	if len(agent) == 0 && !isWecomAppEnabled(cfg) {
+		return
+	}
+	virtual := map[string]interface{}{}
+	for k, v := range agent {
+		virtual[k] = v
+	}
+	virtual["enabled"] = isWecomAppEnabled(cfg)
+	channels["wecom-app"] = virtual
+}
+
 // GetOpenClawConfig 获取 OpenClaw 配置
 func GetOpenClawConfig(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -146,6 +199,7 @@ func GetOpenClawConfig(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusOK, gin.H{"ok": true, "config": gin.H{}})
 			return
 		}
+		injectWecomVirtualChannel(cfg, ocConfig)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "config": ocConfig})
 	}
 }
@@ -268,20 +322,8 @@ func GetChannels(cfg *config.Config) gin.HandlerFunc {
 		if plugins == nil {
 			plugins = map[string]interface{}{}
 		}
-		// Expose channels.wecom.agent as a virtual "wecom-app" channel for the panel UI
-		if wecom, ok := channels["wecom"].(map[string]interface{}); ok {
-			if agent, ok := wecom["agent"].(map[string]interface{}); ok && len(agent) > 0 {
-				webhookApp := map[string]interface{}{}
-				for k, v := range agent {
-					webhookApp[k] = v
-				}
-				// Also carry enabled state from parent wecom channel
-				if enabled, ok := wecom["enabled"]; ok {
-					webhookApp["enabled"] = enabled
-				}
-				channels["wecom-app"] = webhookApp
-			}
-		}
+		injectWecomVirtualChannel(cfg, ocConfig)
+		channels, _ = ocConfig["channels"].(map[string]interface{})
 		c.JSON(http.StatusOK, gin.H{"ok": true, "channels": channels, "plugins": plugins})
 	}
 }
@@ -338,6 +380,9 @@ func SaveChannel(cfg *config.Config, procMgr *process.Manager) gin.HandlerFunc {
 		}
 		if id == "wecom" {
 			body = normalizeWeComChannelConfig(body)
+			if existing, ok := channels["wecom"].(map[string]interface{}); ok {
+				preserveMissingMapFields(body, existing)
+			}
 		}
 		// wecom-app is a virtual channel backed by channels.wecom.agent
 		if id == "wecom-app" {
@@ -359,12 +404,11 @@ func SaveChannel(cfg *config.Config, procMgr *process.Manager) gin.HandlerFunc {
 			if k, ok := agent["encodingAesKey"].(string); ok && k != "" {
 				wecom["encodingAesKey"] = k
 			}
-			if _, hasEnabled := body["enabled"]; hasEnabled {
-				wecom["enabled"] = body["enabled"]
-			} else if _, ok := wecom["enabled"]; !ok {
-				wecom["enabled"] = true
+			if _, ok := wecom["enabled"]; !ok {
+				wecom["enabled"] = false
 			}
 			channels["wecom"] = wecom
+			delete(channels, "wecom-app")
 			ocConfig["channels"] = channels
 			if err := cfg.WriteOpenClawJSON(ocConfig); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
@@ -1119,6 +1163,7 @@ func ToggleChannel(cfg *config.Config, procMgr *process.Manager, napcatMon *moni
 			}
 			wecom["enabled"] = req.Enabled
 			channels["wecom"] = wecom
+			delete(channels, "wecom-app")
 			// plugin entry 也用 wecom
 			pe, _ := entries["wecom"].(map[string]interface{})
 			if pe == nil {
@@ -1133,6 +1178,9 @@ func ToggleChannel(cfg *config.Config, procMgr *process.Manager, napcatMon *moni
 			}
 			ch["enabled"] = req.Enabled
 			channels[req.ChannelID] = ch
+			if req.ChannelID == "wecom" {
+				delete(channels, "wecom-app")
+			}
 
 			// 飞书特殊处理：确定当前活跃的 plugin entry ID，启用/禁用正确的条目
 			if req.ChannelID == "feishu" {
@@ -1428,10 +1476,9 @@ func isNativeOpenAI(baseURL string) bool {
 	return strings.Contains(strings.ToLower(baseURL), "api.openai.com")
 }
 
-
 // resolveActiveFeishuEntryID 返回当前启用的飞书插件 entry ID
 func resolveActiveFeishuEntryID(entries map[string]interface{}) string {
-	for _, id := range []string{"feishu-openclaw-plugin", "feishu"} {
+	for _, id := range append(append([]string{}, officialFeishuEntryIDs...), "feishu") {
 		if entry, ok := entries[id].(map[string]interface{}); ok {
 			if enabled, _ := entry["enabled"].(bool); enabled {
 				return id
@@ -1439,7 +1486,7 @@ func resolveActiveFeishuEntryID(entries map[string]interface{}) string {
 		}
 	}
 	// 没有 enabled 的，返回有 entry 的第一个
-	for _, id := range []string{"feishu-openclaw-plugin", "feishu"} {
+	for _, id := range append(append([]string{}, officialFeishuEntryIDs...), "feishu") {
 		if entries[id] != nil {
 			return id
 		}
@@ -1487,9 +1534,9 @@ func SwitchFeishuVariant(cfg *config.Config, procMgr *process.Manager, sysLog ..
 		} else {
 			// Pro 版：clawteam→"feishu"，official→"feishu-openclaw-plugin"
 			enableID = "feishu"
-			disableID = "feishu-openclaw-plugin"
+			disableID = resolveInstalledOfficialFeishuEntryID(entries)
 			if req.Variant == "official" {
-				enableID = "feishu-openclaw-plugin"
+				enableID = resolveInstalledOfficialFeishuEntryID(entries)
 				disableID = "feishu"
 				label = "飞书官方版"
 			}
@@ -1510,10 +1557,23 @@ func SwitchFeishuVariant(cfg *config.Config, procMgr *process.Manager, sysLog ..
 			disableEntry["enabled"] = false
 			entries[disableID] = disableEntry
 		}
+		if req.Variant == "official" {
+			for _, aliasID := range officialFeishuEntryIDs {
+				if aliasID == enableID {
+					continue
+				}
+				if aliasEntry, ok := entries[aliasID].(map[string]interface{}); ok {
+					aliasEntry["enabled"] = false
+					entries[aliasID] = aliasEntry
+				}
+			}
+		}
 
 		// 清理可能存在的 feishu-openclaw-plugin 脏 entry（Lite 版无此插件）
 		if cfg.IsLiteEdition() {
-			delete(entries, "feishu-openclaw-plugin")
+			for _, aliasID := range officialFeishuEntryIDs {
+				delete(entries, aliasID)
+			}
 		}
 
 		plugins["entries"] = entries

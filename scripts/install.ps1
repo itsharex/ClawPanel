@@ -10,11 +10,9 @@
 $ErrorActionPreference = "Stop"
 
 $REPO = "zhaoxinyi02/ClawPanel"
-$GITEE_REPO = "zxy000006/ClawPanel"
 $TAG_PREFIX = "pro-v"
-$GITEE_RAW_BASE = "https://gitee.com/$GITEE_REPO/raw/main"
-$GITEE_RELEASE_BASE = "https://gitee.com/$GITEE_REPO/releases/download"
-$GITEE_META = "$GITEE_RAW_BASE/release/update-pro.json"
+$ACCEL_BASE = "http://47.76.58.84:16198/clawpanel"
+$ACCEL_META = "$ACCEL_BASE/update-pro.json"
 $INSTALL_DIR = "C:\ClawPanel"
 $SERVICE_NAME = "ClawPanel"
 $PORT = "19527"
@@ -23,7 +21,7 @@ $PORT = "19527"
 Write-Host "  [ClawPanel] 获取最新版本信息..." -ForegroundColor Cyan
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $releaseInfo = Invoke-RestMethod -Uri $GITEE_META -UseBasicParsing
+    $releaseInfo = Invoke-RestMethod -Uri $ACCEL_META -UseBasicParsing
     $tag = [string]$releaseInfo.latest_version
     if ([string]::IsNullOrWhiteSpace($tag)) {
         throw "empty latest_version"
@@ -40,7 +38,7 @@ try {
         $tag = [string](($releaseInfo | Where-Object { $_.tag_name -like "$TAG_PREFIX*" } | Select-Object -First 1).tag_name)
         $VERSION = $tag -replace "^$TAG_PREFIX", ''
     } catch {
-        $VERSION = "5.2.10"
+        $VERSION = "5.2.12"
     }
 }
 
@@ -51,9 +49,9 @@ $DownloadSource = if ($env:DOWNLOAD_SOURCE) { $env:DOWNLOAD_SOURCE } else { $nul
 if (-not $DownloadSource) {
     Write-Host "  [ClawPanel] 请选择下载线路：" -ForegroundColor Cyan
     Write-Host "    1) GitHub      中国香港及境外服务器推荐" -ForegroundColor White
-    Write-Host "    2) Gitee       中国大陆服务器推荐，更稳当一些" -ForegroundColor White
+    Write-Host "    2) 加速服务器  中国大陆服务器推荐，更稳当一些" -ForegroundColor White
     $sourceChoice = Read-Host "  请输入 [1/2]（默认 2）"
-    if ($sourceChoice -eq '1') { $DownloadSource = 'github' } else { $DownloadSource = 'gitee' }
+    if ($sourceChoice -eq '1') { $DownloadSource = 'github' } else { $DownloadSource = 'accel' }
 }
 
 # ==================== 工具函数 ====================
@@ -106,18 +104,18 @@ Log "目录已创建: $INSTALL_DIR"
 
 # ---- Step 2 ----
 Step 2 $TOTAL "下载 ClawPanel v$VERSION..."
-$downloadUrl = if ($DownloadSource -eq "github") { "https://github.com/$REPO/releases/download/${TAG_PREFIX}${VERSION}/$BINARY_NAME" } else { "$GITEE_RELEASE_BASE/${TAG_PREFIX}${VERSION}/$BINARY_NAME" }
-$fallbackUrl = if ($DownloadSource -eq "github") { "$GITEE_RELEASE_BASE/${TAGPrefix}${VERSION}/$BINARY_NAME" } else { "https://github.com/$REPO/releases/download/${TAGPrefix}${VERSION}/$BINARY_NAME" }
+$downloadUrl = if ($DownloadSource -eq "github") { "https://github.com/$REPO/releases/download/${TAG_PREFIX}${VERSION}/$BINARY_NAME" } else { "$ACCEL_BASE/releases/$BINARY_NAME" }
+$fallbackUrl = if ($DownloadSource -eq "github") { "$ACCEL_BASE/releases/$BINARY_NAME" } else { "https://github.com/$REPO/releases/download/${TAG_PREFIX}${VERSION}/$BINARY_NAME" }
 $targetPath = "$INSTALL_DIR\clawpanel.exe"
 if ($LocalBinary) {
     if (-not (Test-Path $LocalBinary)) { Err "指定的本地构建包不存在: $LocalBinary" }
-    $targetPath = "$InstallDir\clawpanel.exe"
+    $targetPath = "$INSTALL_DIR\clawpanel.exe"
     Copy-Item -Path $LocalBinary -Destination $targetPath -Force
     Info "已使用当前目录中的本地 Pro 构建包进行安装。"
 } elseif ($DownloadSource -eq 'github') {
-    Info "已选择 GitHub（中国香港及境外服务器推荐），失败时自动回退到 Gitee。"
+    Info "已选择 GitHub（中国香港及境外服务器推荐），失败时自动回退到加速服务器。"
 } else {
-    Info "已选择 Gitee（中国大陆服务器推荐），失败时自动回退到 GitHub。"
+    Info "已选择加速服务器（中国大陆服务器推荐），失败时自动回退到 GitHub。"
 }
 if (-not $LocalBinary) { Info "下载地址: $downloadUrl" }
 
