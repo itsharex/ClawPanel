@@ -449,6 +449,29 @@ let fakeSessionMessages: Record<string, FakeSessionMessage[]> = loadDemoState(
 saveDemoState(DEMO_SESSIONS_STORAGE_KEY, fakeSessions);
 saveDemoState(DEMO_SESSION_MESSAGES_STORAGE_KEY, fakeSessionMessages);
 
+let fakePanelChatSessions = [
+  {
+    id: 'panel-demo-1',
+    openclawSessionId: 'panel-demo-1',
+    agentId: 'main',
+    chatType: 'direct',
+    title: '本地开发助手',
+    createdAt: Date.now() - 3600000,
+    updatedAt: Date.now() - 120000,
+    messageCount: 4,
+    lastMessage: '帮我看看当前工作区里有哪些关键文件',
+  },
+];
+
+let fakePanelChatMessages: Record<string, FakeSessionMessage[]> = {
+  'panel-demo-1': [
+    { id: 'pc-1', role: 'user', content: '你好', timestamp: new Date(Date.now() - 300000).toISOString() },
+    { id: 'pc-2', role: 'assistant', content: '你好，我已经在面板里待命了。你可以直接让我查看工作区、读取文件或调用已安装技能。', timestamp: new Date(Date.now() - 294000).toISOString() },
+    { id: 'pc-3', role: 'user', content: '帮我看看当前工作区里有哪些关键文件', timestamp: new Date(Date.now() - 130000).toISOString() },
+    { id: 'pc-4', role: 'assistant', content: 'Demo 模式下我会返回模拟结果：`AGENTS.md`、`IDENTITY.md`、`BOOTSTRAP.md` 这些都是当前工作区的关键文件。', timestamp: new Date(Date.now() - 120000).toISOString() },
+  ],
+};
+
 function findFakeSessionsById(sessionId: string, agentId?: string) {
   return fakeSessions.filter(item => item.sessionId === sessionId && (!agentId || agentId === 'all' || item.agentId === agentId));
 }
@@ -834,6 +857,61 @@ export const mockApi = {
   // --- Misc ---
   checkModelHealth: async (_baseUrl: string, _apiKey: string, _apiType: string, _modelId?: string) => { await delay(1500); return { ok: true, healthy: true, latencyMs: 320, model: _modelId || 'default' }; },
   aiChat: async (_messages: any[], _providerId?: string, _modelId?: string) => { await delay(1000); return { ok: true, reply: { role: 'assistant', content: '这是 Demo 模式的 AI 回复。在前端开发模式下，AI 聊天功能返回模拟数据。' } }; },
+  getPanelChatSessions: async () => { await delay(120); return { ok: true, sessions: JSON.parse(JSON.stringify(fakePanelChatSessions)) }; },
+  createPanelChatSession: async (data?: { title?: string; chatType?: 'direct' | 'group'; agentId?: string }) => {
+    await delay(180);
+    const now = Date.now();
+    const session = {
+      id: `panel-demo-${now}`,
+      openclawSessionId: `panel-demo-${now}`,
+      agentId: data?.agentId || 'main',
+      chatType: data?.chatType || 'direct',
+      title: data?.title || '新对话',
+      createdAt: now,
+      updatedAt: now,
+      messageCount: 0,
+      lastMessage: '',
+    };
+    fakePanelChatSessions = [session, ...fakePanelChatSessions];
+    fakePanelChatMessages[session.id] = [];
+    return { ok: true, session };
+  },
+  getPanelChatSessionDetail: async (id: string) => {
+    await delay(120);
+    const session = fakePanelChatSessions.find(item => item.id === id);
+    if (!session) return { ok: false, error: 'not found' };
+    return { ok: true, session, messages: JSON.parse(JSON.stringify(fakePanelChatMessages[id] || [])) };
+  },
+  renamePanelChatSession: async (id: string, title: string) => {
+    await delay(120);
+    const session = fakePanelChatSessions.find(item => item.id === id);
+    if (!session) return { ok: false, error: 'not found' };
+    session.title = title || '新对话';
+    return { ok: true, session };
+  },
+  sendPanelChatMessage: async (id: string, message: string) => {
+    await delay(900);
+    const session = fakePanelChatSessions.find(item => item.id === id);
+    if (!session) return { ok: false, error: 'not found' };
+    const now = Date.now();
+    const userMessage = { id: `user-${now}`, role: 'user', content: message, timestamp: new Date(now).toISOString() };
+    const botMessage = { id: `assistant-${now}`, role: 'assistant', content: `Demo 模式下，OpenClaw 会在这里直接回复你，并且可以继续使用本地技能与工作区能力。\n\n你刚刚说的是：${message}`, timestamp: new Date(now + 1000).toISOString() };
+    fakePanelChatMessages[id] = [...(fakePanelChatMessages[id] || []), userMessage, botMessage];
+    session.updatedAt = now + 1000;
+    session.messageCount = fakePanelChatMessages[id].length;
+    session.lastMessage = message;
+    if (!session.title || session.title === '新对话') {
+      session.title = message.slice(0, 20) || '新对话';
+    }
+    fakePanelChatSessions = [session, ...fakePanelChatSessions.filter(item => item.id !== id)];
+    return { ok: true, session, messages: JSON.parse(JSON.stringify(fakePanelChatMessages[id])), reply: botMessage.content };
+  },
+  deletePanelChatSession: async (id: string) => {
+    await delay(150);
+    fakePanelChatSessions = fakePanelChatSessions.filter(item => item.id !== id);
+    delete fakePanelChatMessages[id];
+    return { ok: true };
+  },
   restartProcess: async () => { await delay(500); return { ok: true }; },
   restartPanel: async () => { await delay(500); return { ok: true }; },
   workspaceDownloadUrl: (_filePath: string) => '#',
