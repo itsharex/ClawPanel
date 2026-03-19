@@ -10,6 +10,28 @@ import type { LogEntry } from '../hooks/useWebSocket';
 import { useI18n } from '../i18n';
 import { resolveOpenClawRuntime } from '../lib/openclawRuntime';
 
+interface SessionActivityItem {
+  agentId?: string;
+  sessionId: string;
+  lastChannel?: string;
+  updatedAt: number;
+  originLabel?: string;
+  originProvider?: string;
+  lastTo?: string;
+  messageCount?: number;
+  chatType?: string;
+  recentMessages?: Array<{ id?: string; role?: string; content?: string; timestamp?: string }>;
+}
+
+interface RecentFeedItem {
+  id: string;
+  time: number;
+  source: string;
+  summary: string;
+  detail: string;
+  synthetic?: boolean;
+}
+
 interface DashboardProps {
   logEntries: LogEntry[];
   refreshLog: () => void;
@@ -23,6 +45,7 @@ function DashboardPage({ logEntries, refreshLog }: DashboardProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const logRef = useRef<HTMLDivElement>(null);
+  const [sessionActivity, setSessionActivity] = useState<SessionActivityItem[]>([]);
 
   useEffect(() => {
     api.getStatus().then(r => { if (r.ok) setStatus(r); });
@@ -35,8 +58,23 @@ function DashboardPage({ logEntries, refreshLog }: DashboardProps) {
   }, []);
 
   useEffect(() => {
+    const loadSessionActivity = () => {
+      if (document.hidden) return;
+      api.getSessions('all').then(r => {
+        if (!r.ok || !Array.isArray(r.sessions)) return;
+        setSessionActivity(dedupeSessionActivity(r.sessions as SessionActivityItem[]).slice(0, 100));
+      }).catch(() => {});
+    };
+    loadSessionActivity();
+    const t = setInterval(loadSessionActivity, 10000);
+    const onVisible = () => { if (!document.hidden) loadSessionActivity(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
+
+  useEffect(() => {
     if (autoScroll && logRef.current) logRef.current.scrollTop = 0;
-  }, [logEntries.length, autoScroll]);
+  }, [sessionActivity.length, logEntries.length, autoScroll]);
 
   const nc = status?.napcat || {};
   const wc = status?.wechat || {};
@@ -54,18 +92,12 @@ function DashboardPage({ logEntries, refreshLog }: DashboardProps) {
         ? 'red'
         : 'amber';
 
-  const filteredLogs = useMemo(
-    () => logEntries.filter(entry => !isNoiseEvent(entry)),
-    [logEntries],
-  );
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayLogs = filteredLogs.filter(entry => entry.time >= todayStart.getTime());
-  const messageLogs = todayLogs.filter(entry => entry.source !== 'system');
-  const messageLogCount = messageLogs.length;
-  const inboundCount = messageLogs.filter(entry => entry.source === 'qq' || entry.source === 'wechat').length;
-  const botCount = messageLogs.filter(entry => entry.source === 'openclaw').length;
-  const getExpandableContent = (entry: LogEntry) => entry.detail?.trim() || entry.summary?.trim() || '';
+  const filteredLogs = useMemo(() => logEntries.filter(entry => !isNoiseEvent(entry)), [logEntries]);
+  const messageLogCount = sessionActivity.reduce((sum, item) => sum + (item.messageCount || 0), 0);
+  const inboundCount = sessionActivity.length;
+  const botCount = sessionActivity.filter(item => (item.messageCount || 0) > 1).length;
+  const recentFeed = useMemo(() => buildRecentFeed(filteredLogs, sessionActivity).slice(0, 100), [filteredLogs, sessionActivity]);
+  const getExpandableContent = (entry: RecentFeedItem) => entry.detail?.trim() || entry.summary?.trim() || '';
 
   // Build connected channels dynamically from enabledChannels returned by /api/status
   const enabledChannels: { id: string; label: string; type: string }[] = oc.enabledChannels || [];
@@ -244,7 +276,7 @@ function DashboardPage({ logEntries, refreshLog }: DashboardProps) {
               <h3 className="font-bold text-sm text-gray-900 dark:text-white">{t.dashboard.recentActivity}</h3>
               <div className="flex items-center gap-2 mt-1">
                 <p className="text-[10px] text-gray-500">{t.dashboard.realtimeLog}</p>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border border-blue-100/80 bg-blue-50/80 text-blue-600 dark:border-blue-800/40 dark:bg-blue-900/20 dark:text-blue-300">{filteredLogs.length}</span>
+                 <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border border-blue-100/80 bg-blue-50/80 text-blue-600 dark:border-blue-800/40 dark:bg-blue-900/20 dark:text-blue-300">{recentFeed.length}</span>
               </div>
             </div>
           </div>
@@ -260,13 +292,13 @@ function DashboardPage({ logEntries, refreshLog }: DashboardProps) {
           </div>
         </div>
         <div ref={logRef} className="flex-1 overflow-y-auto min-h-0 p-2 space-y-0.5">
-          {filteredLogs.length === 0 && (
+          {recentFeed.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center text-gray-400 gap-2">
               <Clock size={32} className="opacity-20" />
               <p className="text-xs">{t.dashboard.noActivity}</p>
             </div>
           )}
-          {filteredLogs.slice(0, 100).map((entry) => (
+          {recentFeed.map((entry) => (
             <div key={entry.id} className="group">
               <div
                 className={`flex items-start gap-3 py-2.5 px-3.5 rounded-xl transition-all duration-200 text-xs border border-transparent
@@ -330,6 +362,13 @@ function StatCard({ icon: Icon, label, value, unit, color, bg, sub, modern }: { 
 function sourceColor(s: string) {
   switch (s) {
     case 'qq': return 'bg-blue-100/90 border-blue-100 text-blue-700 dark:bg-blue-900/25 dark:border-blue-800/40 dark:text-blue-300';
+    case 'qqbot': return 'bg-indigo-100/90 border-indigo-100 text-indigo-700 dark:bg-indigo-900/25 dark:border-indigo-800/40 dark:text-indigo-300';
+    case 'wecom': return 'bg-emerald-100/90 border-emerald-100 text-emerald-700 dark:bg-emerald-900/25 dark:border-emerald-800/40 dark:text-emerald-300';
+    case 'feishu': return 'bg-cyan-100/90 border-cyan-100 text-cyan-700 dark:bg-cyan-900/25 dark:border-cyan-800/40 dark:text-cyan-300';
+    case 'telegram': return 'bg-sky-100/90 border-sky-100 text-sky-700 dark:bg-sky-900/25 dark:border-sky-800/40 dark:text-sky-300';
+    case 'discord': return 'bg-violet-100/90 border-violet-100 text-violet-700 dark:bg-violet-900/25 dark:border-violet-800/40 dark:text-violet-300';
+    case 'slack': return 'bg-pink-100/90 border-pink-100 text-pink-700 dark:bg-pink-900/25 dark:border-pink-800/40 dark:text-pink-300';
+    case 'line': return 'bg-green-100/90 border-green-100 text-green-700 dark:bg-green-900/25 dark:border-green-800/40 dark:text-green-300';
     case 'wechat': return 'bg-emerald-100/90 border-emerald-100 text-emerald-700 dark:bg-emerald-900/25 dark:border-emerald-800/40 dark:text-emerald-300';
     case 'system': return 'bg-slate-100/90 border-slate-200 text-slate-700 dark:bg-slate-800/70 dark:border-slate-700 dark:text-slate-300';
     case 'openclaw': return 'bg-sky-100/90 border-sky-100 text-sky-700 dark:bg-sky-900/25 dark:border-sky-800/40 dark:text-sky-300';
@@ -340,6 +379,13 @@ function sourceColor(s: string) {
 function sourceLabel(s: string) {
   switch (s) {
     case 'qq': return 'QQ';
+    case 'qqbot': return 'QQBot';
+    case 'wecom': return '企微';
+    case 'feishu': return '飞书';
+    case 'telegram': return 'Telegram';
+    case 'discord': return 'Discord';
+    case 'slack': return 'Slack';
+    case 'line': return 'LINE';
     case 'wechat': return 'WeChat';
     case 'system': return 'SYS';
     case 'openclaw': return 'Bot';
@@ -374,6 +420,73 @@ function formatUptime(s: number, t: any) {
 
 function isNoiseEvent(entry: { source: string; type: string; summary: string }) {
   return entry.source === 'qq' && entry.type === 'notice.notify';
+}
+
+function dedupeSessionActivity(items: SessionActivityItem[]) {
+  const map = new Map<string, SessionActivityItem>();
+  items.forEach((item) => {
+    const key = `${item.agentId || 'main'}:${item.sessionId}`;
+    const current = map.get(key);
+    if (!current || (item.updatedAt || 0) > (current.updatedAt || 0)) {
+      map.set(key, item);
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+function buildRecentFeed(logs: LogEntry[], sessions: SessionActivityItem[]): RecentFeedItem[] {
+  const feed: RecentFeedItem[] = logs.map(entry => ({
+    id: String(entry.id),
+    time: entry.time,
+    source: entry.source,
+    summary: entry.summary,
+    detail: entry.detail || entry.summary || '',
+  }));
+
+  const covered = new Set<string>();
+  logs.forEach((entry) => {
+    const text = `${entry.summary}\n${entry.detail || ''}`.toLowerCase();
+    sessions.forEach((session) => {
+      const label = String(session.originLabel || session.lastTo || '').toLowerCase();
+      if (!label) return;
+      if (text.includes(label)) {
+        covered.add(`${session.agentId || 'main'}:${session.sessionId}`);
+      }
+    });
+  });
+
+  sessions.forEach((session) => {
+    const key = `${session.agentId || 'main'}:${session.sessionId}`;
+    if (covered.has(key)) return;
+    const channel = session.lastChannel || session.originProvider || 'agent';
+    const recentMessages = Array.isArray(session.recentMessages) ? session.recentMessages : [];
+    if (recentMessages.length > 0) {
+      recentMessages.forEach((msg, idx) => {
+        const role = String(msg.role || 'user');
+        const ts = msg.timestamp ? new Date(msg.timestamp).getTime() : (session.updatedAt || 0) + idx;
+        const source = role === 'assistant' ? 'openclaw' : channel;
+        const content = String(msg.content || '').trim();
+        if (!content) return;
+        feed.push({
+          id: `session:${key}:${msg.id || idx}`,
+          time: Number.isFinite(ts) ? ts : (session.updatedAt || 0),
+          source,
+          summary: content,
+          detail: [
+            `通道: ${sourceLabel(channel)}`,
+            `智能体: ${session.agentId || 'main'}`,
+            `来源: ${session.originLabel || '-'}`,
+            `目标: ${session.lastTo || '-'}`,
+          ].join('\n'),
+          synthetic: true,
+        });
+      });
+      return;
+    }
+    if (channel === 'agent') return;
+  });
+
+  return feed.sort((a, b) => b.time - a.time);
 }
 
 export default memo(DashboardPage);

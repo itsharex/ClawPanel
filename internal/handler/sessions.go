@@ -17,18 +17,19 @@ import (
 
 // SessionInfo represents a session entry from sessions.json
 type SessionInfo struct {
-	AgentID        string `json:"agentId,omitempty"`
-	Key            string `json:"key"`
-	SessionID      string `json:"sessionId"`
-	ChatType       string `json:"chatType"`
-	LastChannel    string `json:"lastChannel"`
-	LastTo         string `json:"lastTo"`
-	UpdatedAt      int64  `json:"updatedAt"`
-	OriginLabel    string `json:"originLabel"`
-	OriginProvider string `json:"originProvider"`
-	OriginFrom     string `json:"originFrom"`
-	SessionFile    string `json:"sessionFile"`
-	MessageCount   int    `json:"messageCount"`
+	AgentID        string                   `json:"agentId,omitempty"`
+	Key            string                   `json:"key"`
+	SessionID      string                   `json:"sessionId"`
+	ChatType       string                   `json:"chatType"`
+	LastChannel    string                   `json:"lastChannel"`
+	LastTo         string                   `json:"lastTo"`
+	UpdatedAt      int64                    `json:"updatedAt"`
+	OriginLabel    string                   `json:"originLabel"`
+	OriginProvider string                   `json:"originProvider"`
+	OriginFrom     string                   `json:"originFrom"`
+	SessionFile    string                   `json:"sessionFile"`
+	MessageCount   int                      `json:"messageCount"`
+	RecentMessages []map[string]interface{} `json:"recentMessages,omitempty"`
 }
 
 // SessionMessage represents a message in a session JSONL file
@@ -288,7 +289,7 @@ func extractMessage(entry map[string]interface{}) map[string]interface{} {
 	}
 
 	role, _ := msg["role"].(string)
-	content := extractTextContent(msg["content"])
+	content := cleanSessionMessageText(extractTextContent(msg["content"]), role)
 	ts, _ := entry["timestamp"].(string)
 
 	if content == "" {
@@ -311,7 +312,7 @@ func extractAssistantMessage(entry map[string]interface{}) map[string]interface{
 		return nil
 	}
 
-	content := extractTextContent(msg["content"])
+	content := cleanSessionMessageText(extractTextContent(msg["content"]), "assistant")
 	ts, _ := entry["timestamp"].(string)
 
 	if content == "" {
@@ -351,14 +352,119 @@ func extractTextContent(content interface{}) string {
 	return ""
 }
 
-func countSessionMessages(filePath string) int {
+func cleanSessionMessageText(content, role string) string {
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return ""
+	}
+	if role == "assistant" {
+		text = strings.TrimPrefix(text, "[[reply_to_current]]")
+		text = strings.TrimPrefix(text, "[[reply_to_parent]]")
+		text = strings.TrimPrefix(text, "[[reply_to_thread]]")
+		return strings.TrimSpace(text)
+	}
+
+	if strings.HasPrefix(text, "[") {
+		if idx := strings.Index(text, "] "); idx > 0 && idx < 80 {
+			text = strings.TrimSpace(text[idx+2:])
+		}
+	}
+
+	if strings.HasPrefix(text, "Conversation info (untrusted metadata):") {
+		if idx := strings.LastIndex(text, "```"); idx >= 0 {
+			text = strings.TrimSpace(text[idx+3:])
+		}
+	}
+	if strings.Contains(text, "<qqimg>") || strings.Contains(text, "<qqvoice>") || strings.Contains(text, "<qqfile>") || strings.Contains(text, "<qqvideo>") {
+		if idx := strings.LastIndex(text, ">"); idx >= 0 && idx+1 < len(text) {
+			tail := strings.TrimSpace(text[idx+1:])
+			if tail != "" {
+				text = tail
+			}
+		}
+	}
+
+	lines := strings.Split(text, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if looksLikeSessionInstructionLine(trimmed) {
+			continue
+		}
+		filtered = append(filtered, trimmed)
+	}
+	if len(filtered) == 0 {
+		return strings.TrimSpace(text)
+	}
+
+	start := len(filtered) - 1
+	for start > 0 {
+		prev := filtered[start-1]
+		if looksLikeCompactUserLine(prev) {
+			start--
+			continue
+		}
+		break
+	}
+	return strings.TrimSpace(strings.Join(filtered[start:], "\n"))
+}
+
+func looksLikeSessionInstructionLine(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	if lower == "```" || strings.HasPrefix(lower, "{") || strings.HasPrefix(lower, "}") {
+		return true
+	}
+	prefixes := []string{
+		"conversation info",
+		"你正在通过",
+		"【会话上下文】",
+		"- 用户:",
+		"- 场景:",
+		"- 消息id:",
+		"- 投递目标:",
+		"- 当前时间戳",
+		"- 定时提醒投递地址:",
+		"【发送图片",
+		"【发送语音",
+		"【发送文件",
+		"【发送视频",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	if strings.HasPrefix(lower, "support") || strings.HasPrefix(lower, "示例:") || strings.HasPrefix(lower, "图片来源:") {
+		return true
+	}
+	if strings.HasPrefix(lower, "1.") || strings.HasPrefix(lower, "2.") || strings.HasPrefix(lower, "3.") || strings.HasPrefix(lower, "4.") || strings.HasPrefix(lower, "5.") || strings.HasPrefix(lower, "6.") || strings.HasPrefix(lower, "7.") {
+		return true
+	}
+	return false
+}
+
+func looksLikeCompactUserLine(line string) bool {
+	if len(line) > 240 {
+		return false
+	}
+	if strings.HasPrefix(line, "[") && strings.Contains(line, "]") {
+		return false
+	}
+	return true
+}
+
+func summarizeSessionTranscript(filePath string, previewLimit int) (int, []map[string]interface{}) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return 0
+		return 0, nil
 	}
 	defer f.Close()
 
 	count := 0
+	recent := make([]map[string]interface{}, 0, previewLimit)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 256*1024), 256*1024)
 	for scanner.Scan() {
@@ -370,11 +476,24 @@ func countSessionMessages(filePath string) int {
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			continue
 		}
-		if t, _ := entry["type"].(string); t == "message" || t == "assistant" {
+		entryType, _ := entry["type"].(string)
+		var msg map[string]interface{}
+		if entryType == "message" {
+			msg = extractMessage(entry)
+		} else if entryType == "assistant" {
+			msg = extractAssistantMessage(entry)
+		}
+		if msg != nil {
 			count++
+			if previewLimit > 0 {
+				recent = append(recent, msg)
+				if len(recent) > previewLimit {
+					recent = recent[len(recent)-previewLimit:]
+				}
+			}
 		}
 	}
-	return count
+	return count, recent
 }
 
 func loadSessionsByAgent(cfg *config.Config, agentID string) []SessionInfo {
@@ -413,7 +532,7 @@ func loadSessionsByAgent(cfg *config.Config, agentID string) []SessionInfo {
 		}
 		si.SessionFile = getString(v, "sessionFile")
 		if si.SessionFile != "" {
-			si.MessageCount = countSessionMessages(si.SessionFile)
+			si.MessageCount, si.RecentMessages = summarizeSessionTranscript(si.SessionFile, 3)
 		}
 		sessions = append(sessions, si)
 	}
