@@ -60,6 +60,7 @@ export interface Translations {
   // Layout / Navigation
   nav: {
     dashboard: string;
+    panelChat: string;
     activityLog: string;
     channels: string;
     skills: string;

@@ -124,6 +124,7 @@ function LayoutShell({ onLogout, napcatStatus, wechatStatus, openclawStatus, pro
 
   const navItems = useMemo(() => [
     { to: '/', icon: LayoutDashboard, label: t.nav.dashboard },
+    { to: '/chat', icon: MessageSquare, label: t.nav.panelChat },
     { to: '/logs', icon: ScrollText, label: t.nav.activityLog },
     { to: '/channels', icon: Radio, label: t.nav.channels },
     { to: '/skills', icon: Sparkles, label: t.nav.skills },
@@ -139,6 +140,7 @@ function LayoutShell({ onLogout, napcatStatus, wechatStatus, openclawStatus, pro
 
   const mobileNavItems = useMemo(() => [
     { to: '/', icon: LayoutDashboard, label: t.nav.dashboard },
+    { to: '/chat', icon: MessageSquare, label: t.nav.panelChat },
     { to: '/channels', icon: Radio, label: t.nav.channels },
     ...(enableAgents ? [{ to: '/agents', icon: Bot, label: locale === 'zh-CN' ? '智能体' : 'Agents' }] : [{ to: '/plugins', icon: Puzzle, label: locale === 'zh-CN' ? '插件' : 'Plugins' }]),
     { to: '/workflows', icon: GitBranch, label: locale === 'zh-CN' ? '工作流' : 'Flows' },
@@ -193,6 +195,7 @@ function LayoutShell({ onLogout, napcatStatus, wechatStatus, openclawStatus, pro
 
   const commandItems = useMemo(() => [
     { label: '仪表盘', keywords: ['dashboard', 'home', '首页', '仪表盘'], path: '/' },
+    { label: locale === 'zh-CN' ? '面板聊天' : 'Panel Chat', keywords: ['chat', 'panel chat', '对话', '聊天', '本地聊天'], path: '/chat' },
     { label: '活动日志', keywords: ['log', 'logs', '日志', '活动日志'], path: '/logs' },
     { label: '通道配置 - QQ个人号', keywords: ['qq', 'napcat', 'qq个人号', 'qq personal'], path: '/channels?channel=qq' },
     { label: '通道配置 - 飞书', keywords: ['feishu', 'lark', '飞书'], path: '/channels?channel=feishu' },

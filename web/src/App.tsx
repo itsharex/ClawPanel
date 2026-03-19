@@ -9,6 +9,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 
 const ActivityLog = lazy(() => import('./pages/ActivityLog'));
+const PanelChat = lazy(() => import('./pages/PanelChat'));
 const Channels = lazy(() => import('./pages/Channels'));
 const CronJobs = lazy(() => import('./pages/CronJobs'));
 const Skills = lazy(() => import('./pages/Skills'));
@@ -55,6 +56,7 @@ export default function App() {
     <Routes>
       <Route element={<Layout onLogout={auth.logout} napcatStatus={ws.napcatStatus} wechatStatus={ws.wechatStatus} openclawStatus={ws.openclawStatus} processStatus={ws.processStatus} wsMessages={ws.wsMessages} />}>
         <Route path="/" element={<Dashboard logEntries={ws.logEntries} refreshLog={ws.refreshLog} />} />
+        <Route path="/chat" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Suspense fallback={<RouteLoadingFallback />}><PanelChat /></Suspense></OpenClawRequired>} />
         <Route path="/logs" element={<Suspense fallback={<RouteLoadingFallback />}><ActivityLog logEntries={ws.logEntries} clearEvents={ws.clearEvents} refreshLog={ws.refreshLog} /></Suspense>} />
         <Route path="/channels" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Suspense fallback={<RouteLoadingFallback />}><Channels /></Suspense></OpenClawRequired>} />
         <Route path="/skills" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Suspense fallback={<RouteLoadingFallback />}><Skills /></Suspense></OpenClawRequired>} />

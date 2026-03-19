@@ -57,6 +57,7 @@ const zhCN: Translations = {
 
   nav: {
     dashboard: '仪表盘',
+    panelChat: '面板聊天',
     activityLog: '活动日志',
     channels: '通道管理',
     skills: '技能中心',
