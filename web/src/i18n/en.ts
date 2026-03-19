@@ -57,6 +57,7 @@ const en: Translations = {
 
   nav: {
     dashboard: 'Dashboard',
+    panelChat: 'Panel Chat',
     activityLog: 'Activity Log',
     channels: 'Channels',
     skills: 'Skills',

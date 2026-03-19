@@ -15,6 +15,8 @@ import (
 	"github.com/zhaoxinyi02/ClawPanel/internal/config"
 )
 
+const sessionScannerMaxTokenSize = 16 * 1024 * 1024
+
 // SessionInfo represents a session entry from sessions.json
 type SessionInfo struct {
 	AgentID        string                   `json:"agentId,omitempty"`
@@ -213,7 +215,7 @@ func readSessionMessages(filePath string, limit int) ([]map[string]interface{}, 
 
 	var allMessages []map[string]interface{}
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+	scanner.Buffer(make([]byte, 1024*1024), sessionScannerMaxTokenSize)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -466,7 +468,7 @@ func summarizeSessionTranscript(filePath string, previewLimit int) (int, []map[s
 	count := 0
 	recent := make([]map[string]interface{}, 0, previewLimit)
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+	scanner.Buffer(make([]byte, 1024*1024), sessionScannerMaxTokenSize)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
