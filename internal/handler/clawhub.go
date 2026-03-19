@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -417,6 +418,14 @@ func InstallClawHubSkill(cfg *config.Config) gin.HandlerFunc {
 		}
 		if err := updateClawHubLock(workdir, slug, version, installedAt); err != nil {
 			_ = os.RemoveAll(skillDir)
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		if err := alignPathOwnershipToParent(skillDir); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		if err := alignPathOwnershipToParent(filepath.Join(workdir, ".clawhub")); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
@@ -950,6 +959,25 @@ func writeClawHubOrigin(skillDir, registryBase, slug, version string, installedA
 		return err
 	}
 	return os.WriteFile(filepath.Join(originDir, "origin.json"), raw, 0644)
+}
+
+func alignPathOwnershipToParent(targetPath string) error {
+	parentInfo, err := os.Stat(filepath.Dir(targetPath))
+	if err != nil {
+		return nil
+	}
+	stat, ok := parentInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	uid := int(stat.Uid)
+	gid := int(stat.Gid)
+	return filepath.Walk(targetPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chown(path, uid, gid)
+	})
 }
 
 func readClawHubOriginEntry(skillDir string) clawHubLockEntry {
